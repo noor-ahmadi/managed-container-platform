@@ -1,0 +1,7 @@
+{
+  "kind": "0.33.0",
+  "kindLinuxAmd64Sha256": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d",
+  "kubernetes": "1.35.8",
+  "kubectlLinuxAmd64Sha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf",
+  "nodeImage": "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
+}

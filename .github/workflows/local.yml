@@ -1,0 +1,43 @@
+name: Local cluster lifecycle
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install local tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $versions = Get-Content local/versions.json -Raw | ConvertFrom-Json
+          New-Item -ItemType Directory -Path .local/bin -Force | Out-Null
+          Invoke-WebRequest "https://github.com/kubernetes-sigs/kind/releases/download/v$($versions.kind)/kind-linux-amd64" -OutFile .local/bin/kind
+          if ((Get-FileHash .local/bin/kind -Algorithm SHA256).Hash.ToLowerInvariant() -cne $versions.kindLinuxAmd64Sha256) {
+            throw 'kind checksum mismatch'
+          }
+          $kubectlUrl = "https://dl.k8s.io/release/v$($versions.kubernetes)/bin/linux/amd64/kubectl"
+          Invoke-WebRequest $kubectlUrl -OutFile .local/bin/kubectl
+          if ((Get-FileHash .local/bin/kubectl -Algorithm SHA256).Hash.ToLowerInvariant() -cne $versions.kubectlLinuxAmd64Sha256) {
+            throw 'kubectl checksum mismatch'
+          }
+          chmod +x .local/bin/kind .local/bin/kubectl
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot make tools executable' }
+          (Resolve-Path .local/bin).Path >> $env:GITHUB_PATH
+      - name: Check cluster lifecycle
+        shell: pwsh
+        run: ./scripts/test-local.ps1
+      - name: Remove project clusters
+        if: always()
+        shell: pwsh
+        run: ./scripts/local.ps1 down
