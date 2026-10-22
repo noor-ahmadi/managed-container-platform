@@ -25,8 +25,12 @@ function Get-Release([string]$Name) {
 }
 function Assert-Denied([string]$Member, [string[]]$Arguments, [string]$Message) {
     $log = Join-Path $state 'expected-denial.txt'
-    & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$Member" @Arguments 2> $log | Out-Null
-    if ($LASTEXITCODE -eq 0 -or (Get-Content $log -Raw) -notlike "*$Message*") { throw "Expected admission rejection: $Message" }
+    $output = & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$Member" @Arguments 2> $log
+    $exitCode = $LASTEXITCODE
+    $detail = Get-Content $log -Raw
+    if ($exitCode -eq 0 -or $detail -notlike "*$Message*") {
+        throw "Expected admission rejection '$Message'; exit $exitCode. $detail $output"
+    }
 }
 
 foreach ($permission in @(
@@ -97,6 +101,7 @@ foreach ($member in @('member-a', 'member-b')) {
     Assert-Denied $member @('patch', 'deployment', 'application', '-n', $source, '--type=json', '-p', $imagePatch, '--dry-run=server') 'approved immutable image'
     $privilegedSpec = $deployment.spec.template.spec | ConvertTo-Json -Depth 40 | ConvertFrom-Json
     $privilegedSpec.containers[0].securityContext | Add-Member -NotePropertyName privileged -NotePropertyValue $true -Force
+    $privilegedSpec.containers[0].securityContext.allowPrivilegeEscalation = $true
     $privilegedFile = Join-Path $state 'privileged-pod.json'
     @{ apiVersion = 'v1'; kind = 'Pod'; metadata = @{ name = 'admission-probe'; namespace = $source }; spec = $privilegedSpec } |
         ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $privilegedFile
