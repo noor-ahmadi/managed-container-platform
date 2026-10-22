@@ -208,6 +208,10 @@ public sealed class ReleaseWorker(Api api)
         if (run.Text("spec", "resourceSnapshotIndex") != state.Text("snapshotIndex") ||
             run.Text("spec", "placementName") != source || run.Text("spec", "stagedRolloutStrategyName") != "two-region")
             throw new InvalidOperationException("Run snapshot or placement changed.");
+        if (state.Text("runUID") != "" && state.Text("runUID") != run.Text("metadata", "uid"))
+            throw new InvalidOperationException("Run identity changed.");
+        if (run.Text("spec", "state") is not ("Initialize" or "Run"))
+            throw new InvalidOperationException("Run was stopped externally.");
         CheckInitialization(run);
         if (!Resources.Condition(run, "Initialized")) return;
         ValidateTargets(run);
@@ -217,14 +221,12 @@ public sealed class ReleaseWorker(Api api)
             await Save(release, root);
             return;
         }
-        if (state.Text("runUID") != run.Text("metadata", "uid")) throw new InvalidOperationException("Run identity changed.");
         if (run.Text("spec", "state") == "Initialize") {
             await api.PatchFleet("clusterstagedupdateruns", runName, new {
                 metadata = new { resourceVersion = run.Text("metadata", "resourceVersion") }, spec = new { state = "Run" }
             });
             return;
         }
-        if (run.Text("spec", "state") != "Run") throw new InvalidOperationException("Run was stopped externally.");
         if (Resources.Condition(run, "Succeeded", "False")) throw new InvalidOperationException("Fleet run failed.");
         if (Resources.Condition(run, "Succeeded")) {
             if (Members.Any(m => state["gates"]?[m].Text("health", "decision") != "Passed"))
