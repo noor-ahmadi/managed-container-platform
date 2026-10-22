@@ -62,6 +62,7 @@ try {
             throw "Repeated startup replaced $name."
         }
     }
+    & (Join-Path $PSScriptRoot 'test-fleet.ps1')
     & $local down
     & $local down
     $after = @(kind get clusters)

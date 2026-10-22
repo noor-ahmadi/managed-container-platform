@@ -1,4 +1,4 @@
-name: Local cluster lifecycle
+name: Local foundation
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   lifecycle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -31,12 +31,27 @@ jobs:
           if ((Get-FileHash .local/bin/kubectl -Algorithm SHA256).Hash.ToLowerInvariant() -cne $versions.kubectlLinuxAmd64Sha256) {
             throw 'kubectl checksum mismatch'
           }
+          Invoke-WebRequest "https://get.helm.sh/helm-v$($versions.helm)-linux-amd64.tar.gz" -OutFile .local/helm.tar.gz
+          if ((Get-FileHash .local/helm.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant() -cne $versions.helmLinuxAmd64Sha256) {
+            throw 'Helm checksum mismatch'
+          }
+          tar -xzf .local/helm.tar.gz -C .local
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot extract Helm' }
+          Move-Item .local/linux-amd64/helm .local/bin/helm
           chmod +x .local/bin/kind .local/bin/kubectl
           if ($LASTEXITCODE -ne 0) { throw 'Cannot make tools executable' }
           (Resolve-Path .local/bin).Path >> $env:GITHUB_PATH
-      - name: Check cluster lifecycle
+      - name: Check cluster lifecycle and Fleet behavior
         shell: pwsh
         run: ./scripts/test-local.ps1
+      - name: Upload foundation evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: foundation-evidence
+          path: .local/foundation-evidence.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
       - name: Remove project clusters
         if: always()
         shell: pwsh
