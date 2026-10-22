@@ -142,6 +142,11 @@ $failedRecoveryUID = $recovering.status.recovery.runUID
 Invoke-Kube hub @('scale', 'deployment/platform-worker', '-n', 'platform-system', '--replicas=0') | Write-Host
 try {
     Invoke-Kube hub @('wait', 'pod', '-n', 'platform-system', '-l', 'app=platform-worker', '--for=delete', '--timeout=90s') | Write-Host
+    $recoveryRun = Invoke-Kube hub @('get', 'clusterstagedupdaterun', $recovering.status.recovery.runName, '-o', 'json') | ConvertFrom-Json
+    if ($recoveryRun.spec.state -ceq 'Initialize') {
+        $runPatch = @{spec = @{state = 'Run'}} | ConvertTo-Json -Compress
+        Invoke-Kube hub @('patch', 'clusterstagedupdaterun', $recovering.status.recovery.runName, '--type=merge', '-p', $runPatch) | Write-Host
+    }
     $stopPatch = @{spec = @{state = 'Stop'}} | ConvertTo-Json -Compress
     Invoke-Kube hub @('patch', 'clusterstagedupdaterun', $recovering.status.recovery.runName, '--type=merge', '-p', $stopPatch) | Write-Host
 } finally { Invoke-Kube hub @('scale', 'deployment/platform-worker', '-n', 'platform-system', '--replicas=1') | Write-Host }
