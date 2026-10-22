@@ -8,5 +8,7 @@ RUN dotnet publish samples/HttpApi/HttpApi.csproj -c Release -o /app --no-restor
 FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:8af87eba5e7cdafb1514d7388be287365da97c132509e84dfe252ffd552398ca
 WORKDIR /app
 COPY --from=build /app .
+ARG DEMO_ERRORS=false
+ENV DEMO_ERRORS=$DEMO_ERRORS
 USER $APP_UID
 ENTRYPOINT ["dotnet", "HttpApi.dll"]

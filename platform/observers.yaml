@@ -1,0 +1,191 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: observer
+  namespace: platform-observers
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: observer
+  namespace: platform-observers
+rules:
+  - apiGroups: ['']
+    resources: [services/proxy]
+    resourceNames: ['http:prometheus:9090']
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observer
+  namespace: platform-observers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: observer
+subjects:
+  - kind: ServiceAccount
+    name: observer
+    namespace: platform-observers
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: observer-config
+  namespace: platform-observers
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        metric_expiration: 15s
+        translation_strategy: UnderscoreEscapingWithSuffixes
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          exporters: [prometheus]
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      scrape_timeout: 3s
+    scrape_configs:
+      - job_name: sample-api
+        static_configs:
+          - targets: ['collector:8889']
+            labels:
+              member: __MEMBER__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector
+  namespace: platform-observers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: collector
+  template:
+    metadata:
+      labels:
+        role: collector
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: __COLLECTOR_IMAGE__
+          args: ['--config=/config/collector.yaml']
+          ports:
+            - containerPort: 4318
+            - containerPort: 8889
+          readinessProbe:
+            tcpSocket:
+              port: 4318
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: observer-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector
+  namespace: platform-observers
+spec:
+  selector:
+    role: collector
+  ports:
+    - name: otlp
+      port: 4318
+    - name: metrics
+      port: 8889
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: platform-observers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: prometheus
+  template:
+    metadata:
+      labels:
+        role: prometheus
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: __PROMETHEUS_IMAGE__
+          args: ['--config.file=/config/prometheus.yml', '--storage.tsdb.path=/prometheus', '--storage.tsdb.retention.time=1h']
+          ports:
+            - containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: observer-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: platform-observers
+spec:
+  selector:
+    role: prometheus
+  ports:
+    - name: http
+      port: 9090

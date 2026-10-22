@@ -13,6 +13,7 @@ foreach ($member in @('member-a', 'member-b')) {
 $hubManifest = (Get-Content (Join-Path $root 'platform/hub.yaml') -Raw).Replace('__WORKER_IMAGE__', $images.worker)
 $hubManifest | & kubectl --kubeconfig $kubeconfig --context kind-managed-platform-hub apply --server-side --field-manager=managed-platform-local -f -
 if ($LASTEXITCODE -ne 0) { throw 'Cannot install the platform worker.' }
+& (Join-Path $PSScriptRoot 'observers.ps1')
 Invoke-Kube hub @('rollout', 'status', 'deployment/platform-worker', '-n', 'platform-system', '--timeout=180s') | Write-Host
 $hub = Invoke-Kube hub @('config', 'view', '--minify', '--raw', '-o', 'json') | ConvertFrom-Json
 $token = Invoke-Kube hub @('create', 'token', 'developer', '-n', 'tenant-demo', '--duration=1h')

@@ -8,7 +8,7 @@ public static class Template
         Resources.Validate(spec);
         Resources.ValidateImage(image, spec.ImageRepository);
         var ns = Resources.SourceName(tenant, service);
-        var selector = new Dictionary<string, string> { ["platform.example.com/service"] = service };
+        var selector = new Dictionary<string, string> { ["platform.example.com/service"] = service, ["role"] = "application" };
         var labels = new Dictionary<string, string>(selector) {
             ["platform.example.com/tenant"] = tenant, ["platform.example.com/release"] = release
         };
@@ -25,9 +25,12 @@ public static class Template
                     containers = new[] { new {
                         name = "application", image, imagePullPolicy = "IfNotPresent",
                         ports = new[] { new { containerPort = spec.Port } },
-                        env = new[] {
+                        env = new object[] {
                             new { name = "ASPNETCORE_HTTP_PORTS", value = spec.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) },
-                            new { name = "PLATFORM_SERVICE", value = service }, new { name = "PLATFORM_RELEASE", value = release }
+                            new { name = "PLATFORM_SERVICE", value = service }, new { name = "PLATFORM_RELEASE", value = release },
+                            new { name = "PLATFORM_NAMESPACE", value = ns }, new { name = "PLATFORM_IMAGE", value = image },
+                            new { name = "PLATFORM_POD", valueFrom = new { fieldRef = new { fieldPath = "metadata.uid" } } },
+                            new { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://collector.platform-observers.svc.cluster.local:4318" }
                         },
                         securityContext = new { allowPrivilegeEscalation = false, readOnlyRootFilesystem = true,
                             capabilities = new { drop = new[] { "ALL" } } },
@@ -69,6 +72,29 @@ public static class Template
                         } }, ports = new[] { new { protocol = "TCP", port = spec.Port } }
                     } } } })
         };
+        var traffic = deployment.DeepClone();
+        traffic["metadata"]!["name"] = "traffic";
+        traffic["metadata"]!["labels"]!["role"] = "traffic";
+        traffic["spec"]!["replicas"] = 1;
+        traffic["spec"]!["strategy"] = Resources.Object(new { type = "Recreate" });
+        traffic["spec"]!["selector"]!["matchLabels"]!["role"] = "traffic";
+        traffic["spec"]!["template"]!["metadata"]!["labels"]!["role"] = "traffic";
+        var container = traffic["spec"]!["template"]!["spec"]!["containers"]![0]!.AsObject();
+        container["args"] = new JsonArray("traffic", $"http://application:{spec.Port}/");
+        foreach (var key in new[] { "env", "ports", "startupProbe", "readinessProbe", "livenessProbe" }) container.Remove(key);
+        bundle["traffic"] = traffic;
+        bundle["trafficEgress"] = Resources.Object(new { apiVersion = "networking.k8s.io/v1", kind = "NetworkPolicy",
+            metadata = Metadata("allow-traffic"), spec = new { podSelector = new { matchLabels = new { role = "traffic" } }, policyTypes = new[] { "Egress" },
+                egress = new[] { new { to = new[] { new { podSelector = new { matchLabels = selector } } }, ports = new[] { new { protocol = "TCP", port = spec.Port } } } } } });
+        bundle["localIngress"] = Resources.Object(new { apiVersion = "networking.k8s.io/v1", kind = "NetworkPolicy",
+            metadata = Metadata("allow-local-traffic"), spec = new { podSelector = new { matchLabels = selector }, policyTypes = new[] { "Ingress" },
+                ingress = new[] { new { @from = new[] { new { podSelector = new { matchLabels = new { role = "traffic" } } } }, ports = new[] { new { protocol = "TCP", port = spec.Port } } } } } });
+        bundle["telemetryEgress"] = Resources.Object(new { apiVersion = "networking.k8s.io/v1", kind = "NetworkPolicy",
+            metadata = Metadata("allow-telemetry"), spec = new { podSelector = new { matchLabels = selector }, policyTypes = new[] { "Egress" },
+                egress = new[] { new { to = new[] { new {
+                    namespaceSelector = new { matchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "platform-observers" } },
+                    podSelector = new { matchLabels = new { role = "collector" } }
+                } }, ports = new[] { new { protocol = "TCP", port = 4318 } } } } } });
         return bundle;
     }
 }
