@@ -22,6 +22,9 @@ public sealed class Contracts
         Assert.AreNotEqual(Resources.SourceName("tenant-demo", "hello"), Resources.SourceName("other-tenant", "hello"));
         Assert.AreEqual(Resources.Hash(bundle.ToJsonString()), Resources.Hash(Template.Render(Spec, "tenant-demo", "hello", "hello-release", Image).ToJsonString()));
         Assert.IsTrue(bundle.ContainsKey("quota") && bundle.ContainsKey("deny") && bundle.ContainsKey("dns"));
+        Assert.AreEqual("application", bundle["service"].Text("spec", "selector", "role"));
+        Assert.AreEqual("traffic", bundle["traffic"].Text("spec", "selector", "matchLabels", "role"));
+        Assert.AreEqual("Recreate", bundle["traffic"].Text("spec", "strategy", "type"));
     }
 
     [TestMethod]
@@ -81,5 +84,68 @@ public sealed class Contracts
         (work, release) = Observation();
         work["spec"]!["workload"]!["manifests"]![0]!["spec"]!["template"]!["spec"]!["containers"]![0]!["image"] = "other/image";
         Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow));
+    }
+
+    [TestMethod]
+    [DataRow(600d, 0d, 0.05, 0d, 24d, 2d, 120, "Passed")]
+    [DataRow(600d, 0d, 0.05, 0d, 24d, 2d, 119, "Baking")]
+    [DataRow(499d, 0d, 0.05, 0d, 24d, 2d, 120, "Blocked")]
+    [DataRow(600d, 0.01, 0.05, 0d, 24d, 2d, 120, "Failed")]
+    [DataRow(600d, 0d, 0.5, 0d, 24d, 2d, 120, "Failed")]
+    [DataRow(600d, 0d, 0.05, 16d, 24d, 2d, 120, "Blocked")]
+    [DataRow(600d, 0d, 0.05, -6d, 24d, 2d, 120, "Blocked")]
+    [DataRow(600d, 0d, 0.05, 0d, 19d, 2d, 120, "Blocked")]
+    [DataRow(600d, 0d, 0.05, 0d, 24d, 1d, 120, "Blocked")]
+    [DataRow(600d, 0d, 0.05, 0d, 24d, 3d, 120, "Blocked")]
+    [DataRow(600d, double.NaN, 0.05, 0d, 24d, 2d, 120, "Blocked")]
+    public void HealthGateFailsClosed(double requests, double errors, double latency, double age,
+        double samples, double instances, int elapsed, string expected) {
+        var now = DateTimeOffset.UtcNow;
+        var reading = new HealthReading(requests, errors, latency, now.ToUnixTimeMilliseconds() / 1000d - age, samples, instances);
+        Assert.AreEqual(expected, HealthGate.Decide(reading, now.AddSeconds(-elapsed), now));
+        Assert.AreEqual("Blocked", HealthGate.Decide(reading with { Requests = null }, now.AddMinutes(-3), now));
+    }
+
+    [TestMethod]
+    public void PrometheusResultsAndQueriesRequireExactUsableEvidence() {
+        var response = JsonNode.Parse("""{"status":"success","data":{"resultType":"vector","result":[{"value":[1,"600"]}]}}""")!;
+        Assert.AreEqual(600, HealthGate.Value(response));
+        response["data"]!["result"]![0]!["value"]![1] = "NaN";
+        Assert.IsNull(HealthGate.Value(response));
+        response["data"]!["result"]![0]!["value"]![1] = "600";
+        response["warnings"] = new JsonArray("partial data");
+        Assert.IsNull(HealthGate.Value(response));
+        response.AsObject().Remove("warnings");
+        response["data"]!["result"]!.AsArray().Add(response["data"]!["result"]![0]!.DeepClone());
+        Assert.IsNull(HealthGate.Value(response));
+        response["data"]!["result"] = new JsonArray();
+        Assert.IsNull(HealthGate.Value(response));
+        response["status"] = "error";
+        Assert.IsNull(HealthGate.Value(response));
+        foreach (var query in HealthGate.Queries("workload-test", "hello", "r1", Image, "member-a").Values) {
+            StringAssert.Contains(query, "platform_namespace=\"workload-test\"");
+            StringAssert.Contains(query, "platform_service=\"hello\"");
+            StringAssert.Contains(query, "platform_release=\"r1\"");
+            StringAssert.Contains(query, "platform_image=\"" + Image + "\"");
+            StringAssert.Contains(query, "member=\"member-a\"");
+        }
+    }
+
+    [TestMethod]
+    public void SnapshotMustContainTheFrozenBundleAndRestrictedNamespace() {
+        var bundle = Template.Render(Spec, "tenant-demo", "hello", "r1", Image);
+        var source = Resources.SourceName("tenant-demo", "hello");
+        var snapshot = Resources.Object(new {
+            metadata = new { labels = new Dictionary<string, string> { ["kubernetes-fleet.io/parent-CRP"] = source, ["kubernetes-fleet.io/resource-index"] = "2" } },
+            spec = new { selectedResources = new object[] {
+                new { kind = "Namespace", metadata = new { name = source, labels = new Dictionary<string, string> {
+                    ["pod-security.kubernetes.io/enforce"] = "restricted", ["platform.example.com/workload"] = "true" } } },
+                new { kind = "ResourceEnvelope", metadata = new { name = "application", @namespace = source }, data = bundle.DeepClone() }
+            } }
+        });
+        Assert.IsTrue(ReleaseWorker.MatchesSnapshot(snapshot, source, "2", bundle));
+        Assert.IsFalse(ReleaseWorker.MatchesSnapshot(snapshot, source, "1", bundle));
+        snapshot["spec"]!["selectedResources"]![1]!["data"]!["deployment"]!["spec"]!["replicas"] = 9;
+        Assert.IsFalse(ReleaseWorker.MatchesSnapshot(snapshot, source, "2", bundle));
     }
 }

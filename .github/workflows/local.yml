@@ -24,7 +24,7 @@ jobs:
       - run: dotnet test -c Release --no-build
   lifecycle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -57,7 +57,7 @@ jobs:
           chmod +x .local/bin/kind .local/bin/kubectl
           if ($LASTEXITCODE -ne 0) { throw 'Cannot make tools executable' }
           (Resolve-Path .local/bin).Path >> $env:GITHUB_PATH
-      - name: Check cluster lifecycle, Fleet, and self-service deployment
+      - name: Check lifecycle, Fleet, deployment, and safe releases
         shell: pwsh
         run: ./scripts/test-local.ps1
       - name: Upload integration evidence
@@ -67,6 +67,7 @@ jobs:
           path: |
             .local/foundation-evidence.json
             .local/deployment-evidence.json
+            .local/safe-release-evidence.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

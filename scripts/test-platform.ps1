@@ -35,6 +35,7 @@ function Assert-Denied([string]$Member, [string[]]$Arguments, [string]$Message) 
 
 foreach ($permission in @(
     @('get', 'secrets', '-n', 'fleet-system'),
+    @('get', 'secrets', '-n', 'platform-system'),
     @('patch', 'clusterapprovalrequests/status'),
     @('create', 'clusterresourceplacements'),
     @('update', 'releases/status', '-n', 'tenant-demo'),
@@ -68,12 +69,19 @@ Wait-Until 'self-service release success after worker restart' {
     if ($current.status['phase'] -ceq 'Failed') { throw $current.status.failure }
     if ($current.status['phase'] -ceq 'Succeeded') { $script:completed = $current; return $true }
     return $false
-} 300
-if ($completed.status.runUID -cne $running.status.runUID -or $completed.status.gatePolicy -cne 'readiness-only') {
+} 720
+if ($completed.status.runUID -cne $running.status.runUID -or $completed.status.gatePolicy -cne 'http-health-v1') {
     throw 'Worker restart changed the run or its gate policy.'
 }
 if (($completed.status.observations.Keys | Sort-Object) -join ',' -cne 'member-a,member-b') {
     throw 'Readiness evidence was not persisted for both members.'
+}
+foreach ($gate in $completed.status.gates.Values) {
+    if ($gate.health.decision -cne 'Passed' -or $gate.health.values.requests -lt 500 -or
+        $gate.health.values.errorRate -ge 0.01 -or $gate.health.values.p95Seconds -ge 0.5 -or
+        ([DateTimeOffset]$gate.approvedAt - [DateTimeOffset]$gate.startedAt).TotalSeconds -lt 120) {
+        throw 'Promotion bypassed a measured application health gate.'
+    }
 }
 Wait-Until 'duplicate release rejection' { (Get-Release $duplicate.metadata.name).status['phase'] -ceq 'Failed' } 30
 $source = $completed.status.sourceNamespace
@@ -106,6 +114,26 @@ foreach ($member in @('member-a', 'member-b')) {
     @{ apiVersion = 'v1'; kind = 'Pod'; metadata = @{ name = 'admission-probe'; namespace = $source }; spec = $privilegedSpec } |
         ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $privilegedFile
     Assert-Denied $member @('create', '-f', $privilegedFile, '--dry-run=server') 'violates PodSecurity'
+    $quotaSpec = $deployment.spec.template.spec | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $quotaSpec.containers[0].resources.requests.cpu = '500m'
+    $quotaSpec.containers[0].resources.limits.cpu = '500m'
+    $quotaFile = Join-Path $state 'quota-pod.json'
+    @{apiVersion = 'v1'; kind = 'Pod'; metadata = @{name = 'quota-probe'; namespace = $source}; spec = $quotaSpec} |
+        ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $quotaFile
+    Assert-Denied $member @('create', '-f', $quotaFile, '--dry-run=server') 'exceeded quota'
+    $otherNamespace = 'other-' + $service.name
+    Set-KubeResource $member @{apiVersion = 'v1'; kind = 'Namespace'; metadata = @{name = $otherNamespace
+        labels = @{'pod-security.kubernetes.io/enforce' = 'restricted'; 'pod-security.kubernetes.io/enforce-version' = 'v1.35'}}}
+    Set-KubeResource $member @{apiVersion = 'v1'; kind = 'Pod'; metadata = @{name = 'network-probe'; namespace = $otherNamespace; labels = @{role = 'traffic'}}
+        spec = @{automountServiceAccountToken = $false; securityContext = @{runAsNonRoot = $true; runAsUser = 10000; seccompProfile = @{type = 'RuntimeDefault'}}
+            containers = @(@{name = 'probe'; image = $versions.testImage; command = @('sleep', '600')
+                securityContext = @{allowPrivilegeEscalation = $false; readOnlyRootFilesystem = $true; capabilities = @{drop = @('ALL')}}
+                resources = @{requests = @{cpu = '10m'; memory = '16Mi'}; limits = @{cpu = '100m'; memory = '32Mi'}}})}}
+    Invoke-Kube $member @('wait', 'pod/network-probe', '-n', $otherNamespace, '--for=condition=Ready', '--timeout=90s') | Write-Host
+    Invoke-Kube $member @('exec', '-n', $otherNamespace, 'network-probe', '--', 'nslookup', "application.${source}.svc.cluster.local") | Out-Null
+    $denialLog = Join-Path $state 'network-denial.txt'
+    & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$member" exec -n $otherNamespace network-probe -- wget -T 3 -q -O - "http://application.${source}.svc.cluster.local:8080/" 2> $denialLog | Out-Null
+    if ($LASTEXITCODE -eq 0) { throw 'Another tenant namespace reached the application.' }
 }
 $releasePatch = @{ spec = @{ image = 'localhost:5001/sample-api@sha256:' + ('a' * 64) } } | ConvertTo-Json -Compress
 Assert-Denied hub @('patch', 'release', $releaseName, '-n', 'tenant-demo', '--type=merge', '-p', $releasePatch, '--dry-run=server') 'immutable'
@@ -115,5 +143,6 @@ $export = Invoke-Platform @('evidence', 'export', $releaseName)
     completedAt = [DateTime]::UtcNow.ToString('o'); release = $export; members = $members
     duplicateRelease = Get-Release $duplicate.metadata.name; workerRestartPreservedRun = $true
     tenantOperatorPermissionsDenied = $true; mutableImageDenied = $true; privilegedPodDenied = $true; immutableReleaseSpec = $true
+    quotaExceededDenied = $true; crossTenantTrafficDenied = $true
 } | ConvertTo-Json -Depth 70 | Set-Content -LiteralPath (Join-Path $state 'deployment-evidence.json')
 Write-Host 'Self-service passed: tenant CLI, two members, application responses, restart, duplicate rejection, and admission checks.'

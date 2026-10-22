@@ -20,6 +20,10 @@ if ((Test-Path -LiteralPath $ownership) -and @(Get-Content $ownership -Raw | Con
 }
 
 New-Item -ItemType Directory -Path $state -Force | Out-Null
+foreach ($receipt in @('foundation-evidence.json', 'deployment-evidence.json', 'safe-release-evidence.json')) {
+    $receiptPath = Join-Path $state $receipt
+    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) { Remove-Item -LiteralPath $receiptPath }
+}
 $sentinel = Join-Path $state 'test-default-kubeconfig'
 Set-Content -LiteralPath $sentinel -Value 'apiVersion: v1
 kind: Config
@@ -64,6 +68,7 @@ try {
     }
     & (Join-Path $PSScriptRoot 'test-fleet.ps1')
     & (Join-Path $PSScriptRoot 'test-platform.ps1')
+    & (Join-Path $PSScriptRoot 'test-safe-releases.ps1')
     & $local down
     & $local down
     if ((Test-Path (Join-Path $state 'registry.json')) -or
