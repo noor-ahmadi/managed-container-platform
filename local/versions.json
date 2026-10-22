@@ -3,5 +3,14 @@
   "kindLinuxAmd64Sha256": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d",
   "kubernetes": "1.35.8",
   "kubectlLinuxAmd64Sha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf",
-  "nodeImage": "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
+  "nodeImage": "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0",
+  "helm": "3.22.1",
+  "helmLinuxAmd64Sha256": "896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea",
+  "fleet": "0.3.1",
+  "hubChartSha256": "04f03e8ab3c05e0b014a51cebbdc58b7c26f270e69011e09d14b9b903866b664",
+  "memberChartSha256": "58febfe1f4026b3f2fd88d43187bdac3a0c2c250d22fc43836f3cc8670c01b35",
+  "hubImageDigest": "sha256:949cac43c089b40457f02edfbc4abd68cd6e36a4986c417c037ebe39a7c93560",
+  "memberImageDigest": "sha256:5926d9351e13d0f0ff3ea61b3270679fdcbc60718b8001492ea50a5eed97cfdd",
+  "refreshTokenImageDigest": "sha256:de900ece61108e716003c138ee4ae3cb3207d8e82459c9db65864fdca57ec2c6",
+  "testImage": "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 }

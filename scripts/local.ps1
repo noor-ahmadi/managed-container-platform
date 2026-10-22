@@ -1,23 +1,9 @@
 #requires -Version 7.0
 param([ValidateSet('check', 'up', 'down')][string]$Action = 'check')
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-$PSNativeCommandUseErrorActionPreference = $false
-$root = Split-Path $PSScriptRoot -Parent
-$versions = Get-Content (Join-Path $root 'local/versions.json') -Raw | ConvertFrom-Json
-$state = Join-Path $root '.local'
-$kubeconfig = Join-Path $state 'kubeconfig'
+. (Join-Path $PSScriptRoot 'common.ps1')
 $ownership = Join-Path $state 'clusters.json'
 $names = @('managed-platform-hub', 'managed-platform-member-a', 'managed-platform-member-b')
-
-function Invoke-Tool([string]$Tool, [string[]]$Arguments) {
-    $result = & $Tool @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Tool $($Arguments -join ' ') exited with code $LASTEXITCODE."
-    }
-    $result | ForEach-Object { "$_" }
-}
 
 $provider = $env:KIND_EXPERIMENTAL_PROVIDER
 $originalPath = $env:PATH
@@ -39,6 +25,10 @@ try {
         if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
             throw 'Install kubectl and add it to PATH. See README.md.'
         }
+        if (-not (Get-Command helm -ErrorAction SilentlyContinue) -or
+            (Invoke-Tool helm @('version', '--template', '{{.Version}}')) -cne "v$($versions.helm)") {
+            throw "Install Helm $($versions.helm) and add it to PATH."
+        }
         $client = Invoke-Tool kubectl @('version', '--client', '-o', 'json') | ConvertFrom-Json
         $clientVersion = [version](($client.clientVersion.gitVersion.TrimStart('v') -split '[-+]')[0])
         $serverVersion = [version]$versions.kubernetes
@@ -47,7 +37,7 @@ try {
         }
     }
     if ($Action -eq 'check') {
-        Write-Host "Ready: kind $($versions.kind), kubectl $clientVersion, Docker Linux engine."
+        Write-Host "Ready: kind $($versions.kind), Helm $($versions.helm), kubectl $clientVersion, Docker Linux engine."
         return
     }
 
@@ -112,6 +102,7 @@ try {
         }
         Write-Host "$name is ready."
     }
+    & (Join-Path $PSScriptRoot 'fleet.ps1')
     Write-Host "Kubeconfig: $kubeconfig"
 } finally {
     $env:KIND_EXPERIMENTAL_PROVIDER = $provider
