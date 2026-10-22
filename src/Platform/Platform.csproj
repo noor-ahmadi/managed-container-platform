@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>platform</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="KubernetesClient" Version="19.0.2" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,11 @@
+{
+  "name": "hello",
+  "spec": {
+    "template": "http-api",
+    "imageRepository": "localhost:5001/sample-api",
+    "port": 8080,
+    "readinessPath": "/healthz",
+    "sizingProfile": "small",
+    "placementProfile": "two-region"
+  }
+}
