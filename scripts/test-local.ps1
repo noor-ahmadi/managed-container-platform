@@ -63,8 +63,11 @@ try {
         }
     }
     & (Join-Path $PSScriptRoot 'test-fleet.ps1')
+    & (Join-Path $PSScriptRoot 'test-platform.ps1')
     & $local down
     & $local down
+    if ((Test-Path (Join-Path $state 'registry.json')) -or
+        (docker ps -aq --filter 'name=^/managed-platform-registry$')) { throw 'Teardown left the project registry behind.' }
     $after = @(kind get clusters)
     if ($LASTEXITCODE -ne 0 -or @($names | Where-Object { $_ -cin $after }).Count -gt 0) {
         throw 'Teardown left project clusters behind.'

@@ -1,4 +1,4 @@
-name: Local foundation
+name: Local platform
 
 on:
   push:
@@ -9,6 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore --locked-mode
+      - run: dotnet build -c Release --no-restore
+      - run: dotnet test -c Release --no-build
   lifecycle:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -16,6 +29,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
       - name: Install local tools
         shell: pwsh
         run: |
@@ -41,14 +57,16 @@ jobs:
           chmod +x .local/bin/kind .local/bin/kubectl
           if ($LASTEXITCODE -ne 0) { throw 'Cannot make tools executable' }
           (Resolve-Path .local/bin).Path >> $env:GITHUB_PATH
-      - name: Check cluster lifecycle and Fleet behavior
+      - name: Check cluster lifecycle, Fleet, and self-service deployment
         shell: pwsh
         run: ./scripts/test-local.ps1
-      - name: Upload foundation evidence
+      - name: Upload integration evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: foundation-evidence
-          path: .local/foundation-evidence.json
+          name: integration-evidence
+          path: |
+            .local/foundation-evidence.json
+            .local/deployment-evidence.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

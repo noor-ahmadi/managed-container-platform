@@ -1,0 +1,209 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-system
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: platform-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer
+  namespace: tenant-demo
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: tenant-demo
+rules:
+  - apiGroups: [platform.example.com]
+    resources: [servicedefinitions]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [platform.example.com]
+    resources: [releases]
+    verbs: [get, list, watch, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer
+  namespace: tenant-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer
+subjects:
+  - kind: ServiceAccount
+    name: developer
+    namespace: tenant-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker
+  namespace: tenant-demo
+rules:
+  - apiGroups: [platform.example.com]
+    resources: [servicedefinitions, releases]
+    verbs: [get, list]
+  - apiGroups: [platform.example.com]
+    resources: [servicedefinitions/status, releases/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker
+  namespace: tenant-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-bundles
+  namespace: platform-system
+rules:
+  - apiGroups: ['']
+    resources: [configmaps]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-bundles
+  namespace: platform-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-bundles
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: platform-worker
+rules:
+  - apiGroups: ['']
+    resources: [namespaces]
+    verbs: [get, create]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [resourceenvelopes]
+    verbs: [get, create, update]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [clusterresourceplacements]
+    verbs: [get, create]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [clusterstagedupdateruns]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [clusterapprovalrequests]
+    verbs: [get]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [clusterapprovalrequests/status]
+    verbs: [patch]
+  - apiGroups: [placement.kubernetes-fleet.io]
+    resources: [works]
+    verbs: [get, list, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: platform-worker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: platform-worker
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: platform-system
+---
+apiVersion: placement.kubernetes-fleet.io/v1beta1
+kind: ClusterStagedUpdateStrategy
+metadata:
+  name: two-region
+spec:
+  stages:
+    - name: regiona
+      labelSelector:
+        matchLabels:
+          platform.example.com/region: member-a
+      afterStageTasks:
+        - type: Approval
+    - name: regionb
+      labelSelector:
+        matchLabels:
+          platform.example.com/region: member-b
+      afterStageTasks:
+        - type: Approval
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-worker
+  namespace: platform-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-worker
+  template:
+    metadata:
+      labels:
+        app: platform-worker
+    spec:
+      serviceAccountName: worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: __WORKER_IMAGE__
+          args: [worker]
+          env:
+            - name: PLATFORM_TENANT_NAMESPACE
+              value: tenant-demo
+            - name: PLATFORM_NAMESPACE
+              value: platform-system
+            - name: PLATFORM_IMAGE_REPOSITORY
+              value: localhost:5001/sample-api
+            - name: DOTNET_EnableDiagnostics
+              value: '0'
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

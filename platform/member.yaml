@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-observers
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: platform-workload
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        platform.example.com/workload: 'true'
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  validations:
+    - expression: object.spec.template.spec.containers.all(c, c.image.matches('^localhost:5001/sample-api@sha256:[a-f0-9]{64}$'))
+      message: Workloads must use an approved immutable image.
+    - expression: has(object.spec.template.metadata.labels) && 'platform.example.com/release' in object.spec.template.metadata.labels && 'platform.example.com/service' in object.spec.template.metadata.labels
+      message: Service and release identity are required.
+    - expression: object.spec.template.spec.containers.all(c, has(c.resources) && has(c.resources.requests) && has(c.resources.limits) && 'cpu' in c.resources.requests && 'memory' in c.resources.requests && 'cpu' in c.resources.limits && 'memory' in c.resources.limits)
+      message: CPU and memory requests and limits are required.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: platform-workload
+spec:
+  policyName: platform-workload
+  validationActions: [Deny]

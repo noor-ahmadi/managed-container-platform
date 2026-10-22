@@ -61,7 +61,8 @@ try {
             $owned = @($owned | Where-Object { $_ -cne $name })
             ConvertTo-Json -InputObject $owned | Set-Content -LiteralPath $ownership
         }
-        Write-Host 'No project-owned clusters remain.'
+        & (Join-Path $PSScriptRoot 'registry.ps1') down
+        Write-Host 'No project-owned clusters or registry remain.'
         return
     }
 
