@@ -58,9 +58,10 @@ public sealed class Api(Kubernetes client)
             Resources.FleetGroup, Resources.FleetVersion, ns, plural, name);
     }
 
-    public async Task DeleteRun(string name) {
+    public async Task DeleteRun(string name, string? uid = null) {
         try { await Client.CustomObjects.DeleteClusterCustomObjectAsync(Resources.FleetGroup,
-            Resources.FleetVersion, "clusterstagedupdateruns", name); }
+            Resources.FleetVersion, "clusterstagedupdateruns", name,
+            body: string.IsNullOrEmpty(uid) ? null : new V1DeleteOptions { Preconditions = new V1Preconditions { Uid = uid } }); }
         catch (HttpOperationException ex) when (Is(ex, HttpStatusCode.NotFound)) { }
     }
 
@@ -69,7 +70,9 @@ public sealed class Api(Kubernetes client)
             var existing = await Client.CoreV1.ReadNamespaceAsync(name);
             if (existing.Metadata.Labels is not { } labels ||
                 !labels.TryGetValue("platform.example.com/service", out var owner) || owner != service ||
-                !labels.TryGetValue("platform.example.com/tenant", out var ownerTenant) || ownerTenant != tenant)
+                !labels.TryGetValue("platform.example.com/tenant", out var ownerTenant) || ownerTenant != tenant ||
+                !labels.TryGetValue("platform.example.com/workload", out var workload) || workload != "true" ||
+                !labels.TryGetValue("pod-security.kubernetes.io/enforce", out var policy) || policy != "restricted")
                 throw new InvalidOperationException("Source namespace has a different owner.");
         } catch (HttpOperationException ex) when (Is(ex, HttpStatusCode.NotFound)) {
             await Client.CoreV1.CreateNamespaceAsync(new V1Namespace {

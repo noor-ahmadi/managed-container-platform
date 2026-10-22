@@ -56,7 +56,7 @@ public static partial class Resources
     public static bool Condition(JsonNode? obj, string type, string expectedStatus = "True") => obj?["status"]?["conditions"]?.AsArray().Any(c =>
         c.Text("type") == type && c.Text("status") == expectedStatus &&
         c.Text("observedGeneration") == obj.Text("metadata", "generation")) == true;
-    public static bool Terminal(string phase) => phase is "Succeeded" or "Failed";
+    public static bool Terminal(string phase) => phase is "Succeeded" or "Failed" or "RolledBack";
     public static JsonObject Resource(string kind, string name, object spec, string? ns = null) => Object(new {
         apiVersion = Group + "/" + Version, kind, metadata = new { name, @namespace = ns }, spec
     });
