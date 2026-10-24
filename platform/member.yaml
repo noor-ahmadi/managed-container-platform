@@ -22,7 +22,7 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [deployments]
   validations:
-    - expression: object.spec.template.spec.containers.all(c, c.image.matches('^localhost:5001/sample-api@sha256:[a-f0-9]{64}$'))
+    - expression: object.spec.template.spec.containers.all(c, c.image.startsWith('__SAMPLE_REPOSITORY__@sha256:') && size(c.image) == size('__SAMPLE_REPOSITORY__') + 72 && c.image.matches('@sha256:[a-f0-9]{64}$'))
       message: Workloads must use an approved immutable image.
     - expression: has(object.spec.template.metadata.labels) && 'platform.example.com/release' in object.spec.template.metadata.labels && 'platform.example.com/service' in object.spec.template.metadata.labels
       message: Service and release identity are required.

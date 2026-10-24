@@ -1,5 +1,6 @@
 #requires -Version 7.0
-. (Join-Path $PSScriptRoot 'common.ps1')
+param([ValidateSet('local', 'azure')][string]$Target = 'local')
+. (Join-Path $PSScriptRoot 'common.ps1') -Target $Target
 $receipt = Get-Content (Join-Path $state 'deployment-evidence.json') -Raw | ConvertFrom-Json -AsHashtable
 $baseline = $receipt.release
 $serviceName = $baseline.spec.serviceName
@@ -45,7 +46,7 @@ try {
         $response = Invoke-Kube $member @('exec', '-n', 'platform-observers', $serviceName, '--', 'wget', '-T', '5', '-q', '-O', '-', "http://application.${source}.svc.cluster.local:8080/") | ConvertFrom-Json
         if ($response.release -cne $baseline.metadata.name) { throw 'Application changed during management downtime.' }
         foreach ($permission in @(@('create', 'deployments', '-n', $source), @('get', 'secrets', '-n', 'platform-observers'))) {
-            $allowed = & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$member" auth can-i @permission --as=system:serviceaccount:platform-observers:observer
+            $allowed = & kubectl --kubeconfig $kubeconfig --context (Get-Context $member) auth can-i @permission --as=system:serviceaccount:platform-observers:observer
             if ($LASTEXITCODE -ne 1 -or $allowed -cne 'no') { throw 'Observer received workload or secret permissions.' }
         }
     }
@@ -54,6 +55,7 @@ Invoke-Kube hub @('rollout', 'status', 'deployment/platform-worker', '-n', 'plat
 
 $bad = Invoke-Platform @('release', 'create', $serviceName, '--image', $images['sample-api-error'])
 $first = Get-Content (Join-Path $root 'samples/service.json') -Raw | ConvertFrom-Json
+$first.spec.imageRepository = ($images['sample-api'] -split '@')[0]
 $first.name = 'first-error-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $firstFile = Join-Path $state 'first-error.json'
 $first | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $firstFile

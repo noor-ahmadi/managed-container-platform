@@ -1,19 +1,22 @@
 #requires -Version 7.0
-param([switch]$SkipBootstrap)
-. (Join-Path $PSScriptRoot 'common.ps1')
-if (-not $SkipBootstrap) { & (Join-Path $PSScriptRoot 'platform.ps1') }
-$registryRecord = Join-Path $state 'registry.json'
-$originalRecord = Get-Content -LiteralPath $registryRecord -Raw
-try {
-    $mismatched = $originalRecord | ConvertFrom-Json
-    $mismatched.id = 'unrelated-container'
-    $mismatched | ConvertTo-Json | Set-Content -LiteralPath $registryRecord
-    $refused = $false
-    try { & (Join-Path $PSScriptRoot 'registry.ps1') down }
-    catch { if ($_.Exception.Message -like '*unowned or mismatched*') { $refused = $true } else { throw } }
-    if (-not $refused) { throw 'Registry teardown accepted a different container identity.' }
-} finally { Set-Content -LiteralPath $registryRecord -Value $originalRecord }
+param([switch]$SkipBootstrap, [ValidateSet('local', 'azure')][string]$Target = 'local')
+. (Join-Path $PSScriptRoot 'common.ps1') -Target $Target
+if (-not $SkipBootstrap) { & (Join-Path $PSScriptRoot 'platform.ps1') -Target $Target }
+if ($Target -ceq 'local') {
+    $registryRecord = Join-Path $state 'registry.json'
+    $originalRecord = Get-Content -LiteralPath $registryRecord -Raw
+    try {
+        $mismatched = $originalRecord | ConvertFrom-Json
+        $mismatched.id = 'unrelated-container'
+        $mismatched | ConvertTo-Json | Set-Content -LiteralPath $registryRecord
+        $refused = $false
+        try { & (Join-Path $PSScriptRoot 'registry.ps1') down }
+        catch { if ($_.Exception.Message -like '*unowned or mismatched*') { $refused = $true } else { throw } }
+        if (-not $refused) { throw 'Registry teardown accepted a different container identity.' }
+    } finally { Set-Content -LiteralPath $registryRecord -Value $originalRecord }
+}
 $images = Get-Content (Join-Path $state 'images.json') -Raw | ConvertFrom-Json
+$repository = ($images.'sample-api' -split '@')[0]
 $cli = Join-Path $root 'src/Platform/bin/Debug/net10.0/platform.dll'
 $tenantConfig = Join-Path $state 'tenant-kubeconfig'
 $tenantArgs = @('--kubeconfig', $tenantConfig, '--context', 'tenant-demo', '--namespace', 'tenant-demo', '--output', 'json')
@@ -25,7 +28,7 @@ function Get-Release([string]$Name) {
 }
 function Assert-Denied([string]$Member, [string[]]$Arguments, [string]$Message) {
     $log = Join-Path $state 'expected-denial.txt'
-    $output = & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$Member" @Arguments 2> $log
+    $output = & kubectl --kubeconfig $kubeconfig --context (Get-Context $Member) @Arguments 2> $log
     $exitCode = $LASTEXITCODE
     $detail = Get-Content $log -Raw
     if ($exitCode -eq 0 -or $detail -notlike "*$Message*") {
@@ -45,6 +48,7 @@ foreach ($permission in @(
     if ($LASTEXITCODE -ne 1 -or $allowed -cne 'no') { throw 'Tenant received an operator permission.' }
 }
 $service = Get-Content (Join-Path $root 'samples/service.json') -Raw | ConvertFrom-Json
+$service.spec.imageRepository = $repository
 $service.name = 'hello-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $serviceFile = Join-Path $state 'test-service.json'
 $service | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $serviceFile
@@ -105,7 +109,7 @@ foreach ($member in @('member-a', 'member-b')) {
     $response = Invoke-Kube $member @('exec', '-n', 'platform-observers', $service.name, '--', 'wget', '-T', '5', '-q', '-O', '-', "http://application.${source}.svc.cluster.local:8080/") | ConvertFrom-Json
     if ($response.service -cne $service.name -or $response.release -cne $releaseName) { throw 'Application returned a different release identity.' }
     $members[$member] = @{ deployment = $deployment; response = $response }
-    $imagePatch = @(@{ op = 'replace'; path = '/spec/template/spec/containers/0/image'; value = 'localhost:5001/sample-api:latest' }) | ConvertTo-Json -AsArray -Compress
+    $imagePatch = @(@{ op = 'replace'; path = '/spec/template/spec/containers/0/image'; value = "$($repository):latest" }) | ConvertTo-Json -AsArray -Compress
     Assert-Denied $member @('patch', 'deployment', 'application', '-n', $source, '--type=json', '-p', $imagePatch, '--dry-run=server') 'approved immutable image'
     $privilegedSpec = $deployment.spec.template.spec | ConvertTo-Json -Depth 40 | ConvertFrom-Json
     $privilegedSpec.containers[0].securityContext | Add-Member -NotePropertyName privileged -NotePropertyValue $true -Force
@@ -132,10 +136,10 @@ foreach ($member in @('member-a', 'member-b')) {
     Invoke-Kube $member @('wait', 'pod/network-probe', '-n', $otherNamespace, '--for=condition=Ready', '--timeout=90s') | Write-Host
     Invoke-Kube $member @('exec', '-n', $otherNamespace, 'network-probe', '--', 'nslookup', "application.${source}.svc.cluster.local") | Out-Null
     $denialLog = Join-Path $state 'network-denial.txt'
-    & kubectl --kubeconfig $kubeconfig --context "kind-managed-platform-$member" exec -n $otherNamespace network-probe -- wget -T 3 -q -O - "http://application.${source}.svc.cluster.local:8080/" 2> $denialLog | Out-Null
+    & kubectl --kubeconfig $kubeconfig --context (Get-Context $member) exec -n $otherNamespace network-probe -- wget -T 3 -q -O - "http://application.${source}.svc.cluster.local:8080/" 2> $denialLog | Out-Null
     if ($LASTEXITCODE -eq 0) { throw 'Another tenant namespace reached the application.' }
 }
-$releasePatch = @{ spec = @{ image = 'localhost:5001/sample-api@sha256:' + ('a' * 64) } } | ConvertTo-Json -Compress
+$releasePatch = @{ spec = @{ image = $repository + '@sha256:' + ('a' * 64) } } | ConvertTo-Json -Compress
 Assert-Denied hub @('patch', 'release', $releaseName, '-n', 'tenant-demo', '--type=merge', '-p', $releasePatch, '--dry-run=server') 'immutable'
 $export = Invoke-Platform @('evidence', 'export', $releaseName)
 @{ commit = Invoke-Tool git @('-C', $root, 'rev-parse', 'HEAD')

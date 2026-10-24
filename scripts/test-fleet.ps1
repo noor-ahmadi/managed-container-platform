@@ -1,5 +1,6 @@
 #requires -Version 7.0
-. (Join-Path $PSScriptRoot 'common.ps1')
+param([ValidateSet('local', 'azure')][string]$Target = 'local')
+. (Join-Path $PSScriptRoot 'common.ps1') -Target $Target
 $namespace = 'platform-foundation-test'
 $name = 'foundation-test'
 $api = 'placement.kubernetes-fleet.io/v1beta1'

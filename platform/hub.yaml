@@ -212,7 +212,7 @@ spec:
             - name: PLATFORM_NAMESPACE
               value: platform-system
             - name: PLATFORM_IMAGE_REPOSITORY
-              value: localhost:5001/sample-api
+              value: __SAMPLE_REPOSITORY__
             - name: DOTNET_EnableDiagnostics
               value: '0'
           resources:
