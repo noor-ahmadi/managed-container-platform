@@ -153,6 +153,7 @@ try {
         if (-not $IsWindows) { [IO.File]::SetUnixFileMode($kubeconfig, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite) }
         Invoke-Kube $cluster.name @('wait', 'nodes', '--all', '--for=condition=Ready', '--timeout=300s') | Write-Host
     }
+    & (Join-Path $PSScriptRoot 'fleet.ps1') -Target azure
     & (Join-Path $PSScriptRoot 'test-fleet.ps1') -Target azure
     & (Join-Path $PSScriptRoot 'platform.ps1') -Target azure
     Set-Content -LiteralPath (Join-Path $state 'sentinel.txt') -Value 'managed-platform-demo' -NoNewline
