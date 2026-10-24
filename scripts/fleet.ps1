@@ -69,6 +69,8 @@ foreach ($member in @('member-a', 'member-b')) {
     }
     Install-Agent $member member @{
         enablePprof = $false
+        # Keep mirrored readiness within the worker's 30-second freshness limit.
+        workApplierRequeueRateLimiterMaxFastBackoffDelaySeconds = 15
         image = @{ tag = "v$($versions.fleet)@$($versions.memberImageDigest)" }
         refreshtoken = @{ tag = "v$($versions.fleet)@$($versions.refreshTokenImageDigest)" }
         config = @{ hubURL = "https://${hubIP}:6443"; hubCA = $hubCA; memberClusterName = $member }
