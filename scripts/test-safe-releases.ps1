@@ -156,7 +156,10 @@ Wait-Until 'failed recovery is blocked and abandoned' {
 } 150
 $failedRecovery = Get-Release $bad.metadata.name
 $locked = Invoke-Platform @('rollback', $serviceName, '--to', 'last-successful')
-Wait-Until 'new releases are rejected while recovery is blocked' { (Get-Release $locked.metadata.name).status['phase'] -ceq 'Failed' } 30
+Wait-Until 'new releases are rejected while recovery is blocked' {
+    $current = Get-Release $locked.metadata.name
+    $current['status'] -and $current.status['phase'] -ceq 'Failed'
+} 30
 $lockedRequest = Get-Release $locked.metadata.name
 if ($lockedRequest.status.failure -cne 'Another release is active for this service.' -or $lockedRequest.status['runUID']) {
     throw 'Failed recovery released the service lock.'
