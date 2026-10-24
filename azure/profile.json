@@ -1,0 +1,8 @@
+{
+  "demoHours": 4,
+  "clusters": [
+    { "name": "hub", "location": "northcentralus", "vmSize": "Standard_D4as_v5", "vmFamily": "standardDASv5Family" },
+    { "name": "member-a", "location": "westus2", "vmSize": "Standard_D4s_v5", "vmFamily": "standardDSv5Family" },
+    { "name": "member-b", "location": "westus3", "vmSize": "Standard_D4s_v4", "vmFamily": "standardDSv4Family" }
+  ]
+}

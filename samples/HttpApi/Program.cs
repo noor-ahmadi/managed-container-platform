@@ -4,6 +4,11 @@ using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
 
+if (args is ["identity-probe", ..]) {
+    await IdentityProbe.Run(args);
+    return;
+}
+
 if (args is ["traffic", var address]) {
     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
     using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(200));
