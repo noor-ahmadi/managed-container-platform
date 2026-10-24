@@ -142,8 +142,15 @@ try {
     $session['registry'] = $session.registryName
     Save-Session $session
     foreach ($cluster in $profile.clusters) {
+        $context = Get-Context $cluster.name
         Invoke-Tool az @('aks', 'get-credentials', '--resource-group', $group, '--name', "platform-$($cluster.name)", '--subscription', $account.id,
-            '--admin', '--file', $kubeconfig, '--context', (Get-Context $cluster.name), '--overwrite-existing', '--output', 'none') | Out-Null
+            '--admin', '--file', $kubeconfig, '--context', $context, '--overwrite-existing', '--output', 'none') | Out-Null
+        $received = Invoke-Tool kubectl @('--kubeconfig', $kubeconfig, 'config', 'current-context')
+        if ($received -cne $context) {
+            if ($received -cne "$context-admin") { throw 'Azure CLI returned an unexpected context identity.' }
+            Invoke-Tool kubectl @('--kubeconfig', $kubeconfig, 'config', 'rename-context', $received, $context) | Out-Null
+        }
+        if (-not $IsWindows) { [IO.File]::SetUnixFileMode($kubeconfig, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite) }
         Invoke-Kube $cluster.name @('wait', 'nodes', '--all', '--for=condition=Ready', '--timeout=300s') | Write-Host
     }
     & (Join-Path $PSScriptRoot 'test-fleet.ps1') -Target azure
