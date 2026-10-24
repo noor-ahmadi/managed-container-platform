@@ -215,11 +215,12 @@ try {
                     resources = @{ requests = @{ cpu = '10m'; memory = '16Mi' }; limits = @{ cpu = '100m'; memory = '32Mi' } } }) }
         }
         Invoke-Kube $member @('wait', '-n', $namespace, 'pod/probe', '--for=condition=Ready', '--timeout=120s') | Write-Host
-        Wait-Until "allowed traffic on $member" { (Probe $member $ip) -ceq 'allowed' } 30
+        # NetworkPolicy label changes converge asynchronously on fresh clusters.
+        Wait-Until "allowed traffic on $member" { (Probe $member $ip) -ceq 'allowed' }
         Invoke-Kube $member @('label', '-n', $namespace, 'pod/probe', 'access=denied', '--overwrite') | Out-Null
-        Wait-Until "denied traffic on $member" { (Probe $member $ip) -ceq 'denied' } 30
+        Wait-Until "denied traffic on $member" { (Probe $member $ip) -ceq 'denied' }
         Invoke-Kube $member @('label', '-n', $namespace, 'pod/probe', 'access=allowed', '--overwrite') | Out-Null
-        Wait-Until "restored traffic on $member" { (Probe $member $ip) -ceq 'allowed' } 30
+        Wait-Until "restored traffic on $member" { (Probe $member $ip) -ceq 'allowed' }
         $evidence.members[$member] = @{ deployment = Get-Object $member @('deployment', 'web', '-n', $namespace)
             mirroredStatus = $mirrored; networkPolicy = @('allowed', 'denied', 'allowed') }
         Write-Host "$member passed: mirrored status and allowed/denied/restored network traffic."

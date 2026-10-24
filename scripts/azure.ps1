@@ -171,4 +171,7 @@ try {
         infrastructure = $checks; preflight = $plan; azureReleaseSuitePassed = $true; workloadIdentityPassed = $true} |
         ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $state 'azure-evidence.json')
     Write-Host 'Azure proof passed. Removing the temporary resources now.'
+} catch {
+    Write-Host "Azure proof failed: $($_.Exception.Message)"
+    throw
 } finally { Remove-Demo }
