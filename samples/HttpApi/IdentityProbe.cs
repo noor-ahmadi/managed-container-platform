@@ -27,12 +27,12 @@ public static class IdentityProbe
                 var token = JsonNode.Parse(await tokenResponse.Content.ReadAsStringAsync())!;
                 if (args[1] == "denied") {
                     var codes = token["error_codes"]?.AsArray();
-                    if (tokenResponse.StatusCode == HttpStatusCode.BadRequest &&
+                    if ((tokenResponse.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized) &&
                         codes?.Any(c => c?.ToString() is "70021" or "700213") == true) {
                         Console.WriteLine("Unbound service account denied by federation.");
                         return;
                     }
-                    throw new InvalidOperationException("Unbound service account did not receive the expected federation denial.");
+                    throw new InvalidOperationException($"Unbound service account did not receive the expected federation denial (HTTP {(int)tokenResponse.StatusCode}; codes: {string.Join(",", codes?.Select(c => c?.ToString()) ?? [])}).");
                 }
                 if (tokenResponse.IsSuccessStatusCode) {
                     using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(uri, "secrets/platform-sentinel?api-version=7.4"));
@@ -45,7 +45,7 @@ public static class IdentityProbe
                         return;
                     }
                     if (response.StatusCode != HttpStatusCode.Forbidden) throw new InvalidOperationException("Key Vault request failed.");
-                } else if (tokenResponse.StatusCode != HttpStatusCode.BadRequest) throw new InvalidOperationException("Identity token exchange failed.");
+                } else if (tokenResponse.StatusCode is not (HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)) throw new InvalidOperationException("Identity token exchange failed.");
                 await Task.Delay(TimeSpan.FromSeconds(5)); // Allow federated credential and role propagation.
             } while (DateTimeOffset.UtcNow < deadline);
             throw new InvalidOperationException("Identity propagation did not complete within three minutes.");
