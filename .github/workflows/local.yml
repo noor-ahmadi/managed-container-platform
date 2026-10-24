@@ -22,6 +22,12 @@ jobs:
       - run: dotnet restore --locked-mode
       - run: dotnet build -c Release --no-restore
       - run: dotnet test -c Release --no-build
+      - name: Check Azure source and cleanup safety
+        shell: pwsh
+        run: |
+          az bicep install --version v0.48.1
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install the pinned Bicep compiler' }
+          ./scripts/test-azure-source.ps1
   lifecycle:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
