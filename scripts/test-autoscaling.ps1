@@ -71,6 +71,7 @@ try {
     foreach ($member in @('member-a', 'member-b')) {
         if (Invoke-Kube $member @('get', 'deployment/autoscale-load', '-n', 'platform-observers', '--ignore-not-found', '-o', 'name')) { throw 'Refusing to replace an existing load fixture.' }
         $traffic = Invoke-Kube $member @('get', 'deployment/traffic', '-n', $source, '-o', 'json') | ConvertFrom-Json -AsHashtable
+        $traffic.spec.template.spec.Remove('serviceAccountName')
         $traffic.spec.template.spec.containers[0].args = @('traffic', "http://application.${source}.svc.cluster.local:8080/")
         Set-KubeResource $member @{apiVersion = 'apps/v1'; kind = 'Deployment'; metadata = @{name = 'autoscale-load'; namespace = 'platform-observers'}
             spec = @{replicas = 6; selector = $traffic.spec.selector; template = $traffic.spec.template}}
