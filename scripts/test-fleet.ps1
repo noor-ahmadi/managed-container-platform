@@ -125,6 +125,8 @@ try {
                 afterStageTasks = @(@{ type = 'Approval' }) }
         ) }
     }
+    Invoke-Kube hub @('wait', "clusterresourceplacement/$name", '--for=condition=ClusterResourcePlacementScheduled', '--timeout=180s') | Write-Host
+    Invoke-Kube hub @('wait', 'clusterschedulingpolicysnapshots', '-l', "kubernetes-fleet.io/parent-CRP=$name,kubernetes-fleet.io/is-latest-snapshot=true", '--for=condition=Scheduled', '--timeout=180s') | Write-Host
     Set-KubeResource hub @{
         apiVersion = $api; kind = 'ClusterStagedUpdateRun'; metadata = @{ name = $name }
         spec = @{ placementName = $name; stagedRolloutStrategyName = $name; state = 'Initialize' }
