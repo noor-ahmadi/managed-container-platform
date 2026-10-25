@@ -71,12 +71,14 @@ try {
     foreach ($member in @('member-a', 'member-b')) {
         if (Invoke-Kube $member @('get', 'deployment/autoscale-load', '-n', 'platform-observers', '--ignore-not-found', '-o', 'name')) { throw 'Refusing to replace an existing load fixture.' }
         $traffic = Invoke-Kube $member @('get', 'deployment/traffic', '-n', $source, '-o', 'json') | ConvertFrom-Json -AsHashtable
-        $traffic.spec.template.spec.Remove('serviceAccountName')
+        foreach ($field in @('serviceAccountName', 'serviceAccount')) { $traffic.spec.template.spec.Remove($field) }
         $traffic.spec.template.spec.containers[0].args = @('traffic', "http://application.${source}.svc.cluster.local:8080/")
         Set-KubeResource $member @{apiVersion = 'apps/v1'; kind = 'Deployment'; metadata = @{name = 'autoscale-load'; namespace = 'platform-observers'}
             spec = @{replicas = 6; selector = $traffic.spec.selector; template = $traffic.spec.template}}
         $createdLoads += $member
         Invoke-Kube $member @('rollout', 'status', 'deployment/autoscale-load', '-n', 'platform-observers', '--timeout=180s') | Write-Host
+        $load = Invoke-Kube $member @('get', 'deployment/autoscale-load', '-n', 'platform-observers', '-o', 'json') | ConvertFrom-Json -AsHashtable
+        if ($load.spec.template.spec.serviceAccountName -cne 'default' -or $load.spec.template.spec.automountServiceAccountToken -cne $false) { throw 'Load fixture did not use its namespace account without a token mount.' }
         $account = Invoke-Kube $member @('get', 'deployment/keda-operator', '-n', 'platform-scaling', '-o', 'jsonpath={.spec.template.spec.serviceAccountName}')
         $permission = & kubectl --kubeconfig $kubeconfig --context (Get-Context $member) auth can-i get secrets -n $source "--as=system:serviceaccount:platform-scaling:$account"
         if ($LASTEXITCODE -ne 1 -or $permission -cne 'no') { throw 'Scaling operator can read workload secrets.' }
@@ -149,6 +151,6 @@ if ($manualRollback.status.bundleSha256 -cne $underLoad.status.bundleSha256) { t
     baseline = $baseline; atTwo = $atTwo; atSix = $atSix; underLoad = $underLoad; recovered = $recovered
     memberBBeforeFailure = $beforeB; memberBAfterFailure = Get-MemberB
     missingMetrics = $missingMetrics; afterLoad = $afterLoad; manualRollback = $manualRollback
-    workerRestartPreservedScaling = $true; missingMetricsHeldReplicas = $true; operatorSecretAccessDenied = $true
+    workerRestartPreservedScaling = $true; missingMetricsHeldReplicas = $true; operatorSecretAccessDenied = $true; loadAccountIsNamespaceDefault = $true
 } | ConvertTo-Json -Depth 95 | Set-Content -LiteralPath (Join-Path $state 'autoscaling-evidence.json')
 Write-Host 'Autoscaling passed: 2 to 6 to 2 replicas, releases and recovery under load, ownership, missing metrics, and explicit rollback.'
