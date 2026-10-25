@@ -49,6 +49,10 @@ spec:
                 placementProfile:
                   type: string
                   enum: [two-region]
+                scalingProfile:
+                  type: string
+                  enum: [fixed, http-requests]
+                  default: fixed
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

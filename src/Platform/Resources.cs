@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 namespace ManagedPlatform;
 
 public record ServiceSpec(string Template, string ImageRepository, int Port, string ReadinessPath,
-    string SizingProfile, string PlacementProfile);
+    string SizingProfile, string PlacementProfile, string ScalingProfile = "fixed");
 public record ServiceFile(string Name, ServiceSpec Spec);
 
 public static partial class Resources
@@ -36,6 +36,8 @@ public static partial class Resources
     public static void Validate(ServiceSpec spec) {
         if (spec.Template != "http-api" || spec.SizingProfile != "small" || spec.PlacementProfile != "two-region")
             throw new ArgumentException("Use template http-api, sizingProfile small, and placementProfile two-region.");
+        if (spec.ScalingProfile is not ("fixed" or "http-requests"))
+            throw new ArgumentException("Use scalingProfile fixed or http-requests.");
         if (spec.Port is < 1024 or > 65535 || spec.ReadinessPath is null || !spec.ReadinessPath.StartsWith('/') ||
             spec.ReadinessPath.Length > 128 || spec.ImageRepository is null || !RepositoryPattern().IsMatch(spec.ImageRepository))
             throw new ArgumentException("Invalid port, readinessPath, or imageRepository.");

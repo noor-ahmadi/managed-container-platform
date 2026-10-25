@@ -90,7 +90,7 @@ public sealed class ReleaseWorker(Api api)
             var previous = serviceState.Text("lastSuccessfulRelease");
             var baseline = previous == "" ? null : await api.Get("releases", previous, tenant);
             if (baseline is not null && (baseline.Text("status", "phase") != "Succeeded" ||
-                baseline.Text("status", "gatePolicy") != HealthGate.Policy ||
+                !HealthGate.IsSupportedPolicy(baseline.Text("status", "gatePolicy")) ||
                 baseline.Text("spec", "serviceUID") != release.Text("spec", "serviceUID"))) baseline = null;
             var restoreName = release.Text("spec", "restoreRelease");
             string json;
@@ -108,7 +108,8 @@ public sealed class ReleaseWorker(Api api)
             var bundleName = "bundle-" + release.Text("metadata", "uid");
             await api.Bundle(bundleName, platform, json, hash);
             state = Resources.Object(new {
-                phase = "Deploying", gatePolicy = HealthGate.Policy, startedAt = DateTimeOffset.UtcNow, progressAt = DateTimeOffset.UtcNow,
+                phase = "Deploying", gatePolicy = spec.ScalingProfile == "http-requests" ? HealthGate.AutoscalingPolicy : HealthGate.Policy,
+                startedAt = DateTimeOffset.UtcNow, progressAt = DateTimeOffset.UtcNow,
                 resolvedService = spec, sourceNamespace = Resources.SourceName(tenant, serviceName),
                 provenance = new { commit = Environment.GetEnvironmentVariable("PLATFORM_SOURCE_REVISION") ?? "unknown",
                     workingTreeDirty = Environment.GetEnvironmentVariable("PLATFORM_SOURCE_DIRTY") != "false",
@@ -120,6 +121,7 @@ public sealed class ReleaseWorker(Api api)
                 state["baseline"] = Resources.Object(new {
                     releaseName = baseline.Text("status", "releaseName"), image = baseline.Text("spec", "image"),
                     bundleName = baseline.Text("status", "bundleName"), bundleSha256 = baseline.Text("status", "bundleSha256"),
+                    gatePolicy = baseline.Text("status", "gatePolicy"),
                     sourceNamespace = state.Text("sourceNamespace"), baselineSnapshotIndex = baseline.Text("status", "snapshotIndex")
                 });
             }
@@ -240,7 +242,7 @@ public sealed class ReleaseWorker(Api api)
             return;
         }
         var expected = Resources.Object(new { metadata = new { name = state.Text("releaseName") },
-            spec = new { image = state.Text("image") }, status = state.DeepClone() });
+            spec = new { image = state.Text("image"), scalingProfile = envelope["data"]?["scaledObject"] is null ? "fixed" : "http-requests" }, status = state.DeepClone() });
         foreach (var stage in run["status"]!["stagesStatus"]!.AsArray()) {
             var member = stage!["clusters"]![0].Text("clusterName");
             var approvalName = stage["afterStageTaskStatus"]![0].Text("approvalRequestName");
@@ -280,7 +282,8 @@ public sealed class ReleaseWorker(Api api)
                 if (gate is not null && (!DateTimeOffset.TryParse(gate.Text("health", "checkedAt"), out var lastCheck) ||
                     now - lastCheck >= TimeSpan.FromSeconds(10))) {
                     gate["health"] = await HealthGate.Observe(source, release.Text("spec", "serviceName"),
-                        state.Text("releaseName"), state.Text("image"), member, DateTimeOffset.Parse(gate.Text("startedAt")), now);
+                        state.Text("releaseName"), state.Text("image"), member, DateTimeOffset.Parse(gate.Text("startedAt")), now,
+                        gate["expectedInstances"]?.GetValue<int>() ?? 2);
                     gate["readinessBlocked"] = true;
                     root["phase"] = recovering ? "RollingBack" : "Blocked";
                     await Save(release, root);
@@ -291,12 +294,14 @@ public sealed class ReleaseWorker(Api api)
             var observation = ready["status"]!["manifestConditions"]!.AsArray().First(m =>
                 m.Text("identifier", "kind") == "Deployment" && m.Text("identifier", "name") == "application");
             var revision = observation.Text("backReportedStatus", "observedStatus", "status", "observedGeneration");
+            var expectedInstances = int.Parse(observation.Text("backReportedStatus", "observedStatus", "status", "replicas"), System.Globalization.CultureInfo.InvariantCulture);
             if (gate is null || gate.Text("workUID") != ready.Text("metadata", "uid") ||
-                gate.Text("workGeneration") != ready.Text("metadata", "generation") || gate.Text("deploymentGeneration") != revision) {
+                gate.Text("workGeneration") != ready.Text("metadata", "generation") || gate.Text("deploymentGeneration") != revision ||
+                gate.Text("expectedInstances") != expectedInstances.ToString(System.Globalization.CultureInfo.InvariantCulture)) {
                 state["gates"] ??= new JsonObject();
                 state["gates"]![member] = Resources.Object(new {
                     startedAt = now, workUID = ready.Text("metadata", "uid"), workGeneration = ready.Text("metadata", "generation"),
-                    deploymentGeneration = revision, approvalName, approvalUID = approval.Text("metadata", "uid")
+                    deploymentGeneration = revision, expectedInstances, approvalName, approvalUID = approval.Text("metadata", "uid")
                 });
                 state["observations"] ??= new JsonObject();
                 state["observations"]![member] = ready.DeepClone();
@@ -308,8 +313,8 @@ public sealed class ReleaseWorker(Api api)
             gate["readinessBlocked"] = false;
             var started = DateTimeOffset.Parse(gate.Text("startedAt"));
             if (gate.Text("health", "decision") == "Passed" &&
-                HealthGate.Decide(gate["health"]!["values"]!.Deserialize<HealthReading>(Resources.Json)!, started, now) == "Passed") {
-                if (!Ready(state["observations"]![member]!, expected, now)) {
+                HealthGate.Decide(gate["health"]!["values"]!.Deserialize<HealthReading>(Resources.Json)!, started, now, expectedInstances) == "Passed") {
+                if (!Ready(state["observations"]![member]!, expected, now, expectedInstances)) {
                     state["observations"]![member] = ready.DeepClone();
                     await Save(release, root);
                     return;
@@ -319,7 +324,7 @@ public sealed class ReleaseWorker(Api api)
                     status = new { conditions = new[] { new {
                         type = "Approved", status = "True", observedGeneration = approval["metadata"]!["generation"]!.GetValue<long>(),
                         lastTransitionTime = now.ToString("yyyy-MM-ddTHH:mm:ssZ"), reason = "ApplicationHealthy",
-                        message = "Exact workload ready; 120-second bake, 500 requests, errors below 1%, p95 below 500 ms, telemetry within 15 seconds."
+                        message = $"{expectedInstances} exact instances ready; 120-second bake, 500 requests, errors below 1%, p95 below 500 ms, telemetry within 15 seconds."
                     } } }
                 }), V1Patch.PatchType.MergePatch);
                 await api.Client.CustomObjects.PatchClusterCustomObjectStatusAsync(patch,
@@ -331,7 +336,7 @@ public sealed class ReleaseWorker(Api api)
                 return;
             }
             if (DateTimeOffset.TryParse(gate.Text("health", "checkedAt"), out var checkedAt) && now - checkedAt < TimeSpan.FromSeconds(10)) return;
-            gate["health"] = await HealthGate.Observe(source, release.Text("spec", "serviceName"), state.Text("releaseName"), state.Text("image"), member, started, now);
+            gate["health"] = await HealthGate.Observe(source, release.Text("spec", "serviceName"), state.Text("releaseName"), state.Text("image"), member, started, now, expectedInstances);
             state["observations"]![member] = ready.DeepClone();
             root["phase"] = recovering ? "RollingBack" : gate.Text("health", "decision") == "Blocked" ? "Blocked" : "Baking";
             await Save(release, root);
@@ -377,7 +382,7 @@ public sealed class ReleaseWorker(Api api)
         }
     }
 
-    public static bool Ready(JsonNode work, JsonNode release, DateTimeOffset now) {
+    public static bool Ready(JsonNode work, JsonNode release, DateTimeOffset now, int? expectedInstances = null) {
         if (!Resources.Condition(work, "Available") || work.Text("spec", "reportBackStrategy", "type") != "Mirror" ||
             work.Text("metadata", "labels", "kubernetes-fleet.io/parent-resource-snapshot-index") != release.Text("status", "snapshotIndex")) return false;
         var desired = work["spec"]?["workload"]?["manifests"]?.AsArray().FirstOrDefault(m =>
@@ -392,8 +397,12 @@ public sealed class ReleaseWorker(Api api)
             timestamp > now.AddSeconds(5) || now - timestamp > TimeSpan.FromSeconds(30)) return false;
         var available = observation?["conditions"]?.AsArray().FirstOrDefault(c => c.Text("type") == "Available" && c.Text("status") == "True");
         var status = reported?["observedStatus"]?["status"];
+        if (!int.TryParse(status.Text("replicas"), out var replicas) || replicas < 2 ||
+            replicas > (release.Text("spec", "scalingProfile") == "http-requests" ? 6 : 2) ||
+            (expectedInstances is not null && replicas != expectedInstances)) return false;
+        var count = replicas.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return available is not null && status.Text("observedGeneration") == available.Text("observedGeneration") &&
-            status.Text("availableReplicas") == "2" && status.Text("readyReplicas") == "2" && status.Text("updatedReplicas") == "2";
+            status.Text("availableReplicas") == count && status.Text("readyReplicas") == count && status.Text("updatedReplicas") == count;
     }
 
     private async Task Fail(JsonObject release, string reason) {

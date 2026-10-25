@@ -64,7 +64,7 @@ try {
             if (Required("to") != "last-successful") throw new ArgumentException("Rollback target must be last-successful.");
             restoreName = service.Text("status", "lastSuccessfulRelease");
             var baseline = restoreName == "" ? null : await server.Get("releases", restoreName, ns);
-            if (baseline is null || baseline.Text("status", "phase") != "Succeeded" || baseline.Text("status", "gatePolicy") != HealthGate.Policy)
+            if (baseline is null || baseline.Text("status", "phase") != "Succeeded" || !HealthGate.IsSupportedPolicy(baseline.Text("status", "gatePolicy")))
                 throw new ArgumentException("No health-verified successful baseline exists.");
             image = baseline.Text("spec", "image");
         } else image = Required("image");

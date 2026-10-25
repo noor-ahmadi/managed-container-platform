@@ -50,7 +50,7 @@ public sealed class Contracts
                     identifier = new { kind = "Deployment", name = "application", @namespace = "workload-test" },
                     conditions = new[] { new { type = "Available", status = "True", observedGeneration = 3 } },
                     backReportedStatus = new { observationTime = DateTimeOffset.UtcNow,
-                        observedStatus = new { status = new { observedGeneration = 3, availableReplicas = 2, readyReplicas = 2, updatedReplicas = 2 } } }
+                        observedStatus = new { status = new { observedGeneration = 3, replicas = 2, availableReplicas = 2, readyReplicas = 2, updatedReplicas = 2 } } }
                 } }
             }
         });
@@ -84,6 +84,51 @@ public sealed class Contracts
         (work, release) = Observation();
         work["spec"]!["workload"]!["manifests"]![0]!["spec"]!["template"]!["spec"]!["containers"]![0]!["image"] = "other/image";
         Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow));
+    }
+
+    [TestMethod]
+    public void RequestScalingLeavesReplicaOwnershipToHpa() {
+        var bundle = Template.Render(Spec with { ScalingProfile = "http-requests" }, "tenant-demo", "hello", "r1", Image);
+        Assert.IsFalse(bundle["deployment"]!["spec"]!.AsObject().ContainsKey("replicas"));
+        Assert.AreEqual("1", bundle["traffic"].Text("spec", "replicas"));
+        var scaler = bundle["scaledObject"]!;
+        Assert.AreEqual("2", scaler.Text("spec", "minReplicaCount"));
+        Assert.AreEqual("6", scaler.Text("spec", "maxReplicaCount"));
+        Assert.AreEqual("managed", scaler.Text("metadata", "labels", "platform.example.com/autoscaling"));
+        var trigger = scaler["spec"]!["triggers"]![0]!;
+        Assert.AreEqual("false", trigger.Text("metadata", "ignoreNullValues"));
+        Assert.AreEqual("5", trigger.Text("metadata", "threshold"));
+        var query = trigger.Text("metadata", "query");
+        foreach (var identity in new[] { "platform_namespace=\"" + Resources.SourceName("tenant-demo", "hello") + "\"", "platform_service=\"hello\"", "platform_release=\"r1\"", "platform_image=\"" + Image + "\"" })
+            StringAssert.Contains(query, identity);
+        StringAssert.Contains(query, "and on() (count(");
+        Assert.AreEqual("8", bundle["quota"].Text("spec", "hard", "pods"));
+        Assert.AreEqual("2Gi", bundle["quota"].Text("spec", "hard", "limits.memory"));
+        Assert.IsFalse(Template.Render(Spec, "tenant-demo", "hello", "r1", Image).ContainsKey("scaledObject"));
+        Assert.ThrowsExactly<ArgumentException>(() => Resources.Validate(Spec with { ScalingProfile = "unbounded" }));
+    }
+
+    [TestMethod]
+    public void ScaledReadinessAndHealthRequireEveryExpectedInstance() {
+        var (work, release) = Observation();
+        var status = work["status"]!["manifestConditions"]![0]!["backReportedStatus"]!["observedStatus"]!["status"]!;
+        foreach (var field in new[] { "replicas", "availableReplicas", "readyReplicas", "updatedReplicas" }) status[field] = 6;
+        Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow));
+        release["spec"]!["scalingProfile"] = "http-requests";
+        Assert.IsTrue(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow, 6));
+        Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow, 2));
+        status["readyReplicas"] = 5;
+        Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow));
+        foreach (var field in new[] { "replicas", "availableReplicas", "readyReplicas", "updatedReplicas" }) status[field] = 7;
+        Assert.IsFalse(ReleaseWorker.Ready(work, release, DateTimeOffset.UtcNow));
+        var now = DateTimeOffset.UtcNow;
+        var reading = new HealthReading(600, 0, 0.05, now.ToUnixTimeMilliseconds() / 1000d, 24, 6);
+        Assert.AreEqual("Passed", HealthGate.Decide(reading, now.AddSeconds(-120), now, 6));
+        Assert.AreEqual("Blocked", HealthGate.Decide(reading with { Instances = 5 }, now.AddSeconds(-120), now, 6));
+        Assert.AreEqual("Blocked", HealthGate.Decide(reading, now.AddSeconds(-120), now, 7));
+        Assert.IsTrue(HealthGate.IsSupportedPolicy(HealthGate.Policy));
+        Assert.IsTrue(HealthGate.IsSupportedPolicy(HealthGate.AutoscalingPolicy));
+        Assert.IsFalse(HealthGate.IsSupportedPolicy("readiness-only"));
     }
 
     [TestMethod]

@@ -11,22 +11,29 @@ public record HealthReading(double? Requests, double? ErrorRate, double? P95Seco
 public static class HealthGate
 {
     public const string Policy = "http-health-v1";
+    public const string AutoscalingPolicy = "http-health-scaled-v1";
     public const int BakeSeconds = 120;
+    public static bool IsSupportedPolicy(string policy) => policy is Policy or AutoscalingPolicy;
 
-    public static string Decide(HealthReading reading, DateTimeOffset started, DateTimeOffset now) {
+    public static string Decide(HealthReading reading, DateTimeOffset started, DateTimeOffset now, int expectedInstances = 2) {
         var values = new[] { reading.Requests, reading.ErrorRate, reading.P95Seconds,
             reading.OldestRequestSeconds, reading.Samples, reading.Instances };
         if (values.Any(v => v is null || !double.IsFinite(v.Value) || v < 0)) return "Blocked";
         var age = now.ToUnixTimeMilliseconds() / 1000d - reading.OldestRequestSeconds!.Value;
-        if (age is < -5 or > 15 || reading.Instances != 2) return "Blocked";
+        if (age is < -5 or > 15 || expectedInstances is < 2 or > 6 || reading.Instances != expectedInstances) return "Blocked";
         if (now < started.AddSeconds(BakeSeconds)) return "Baking";
         if (reading.Requests < 500 || reading.Samples < 20) return "Blocked";
         return reading.ErrorRate < 0.01 && reading.P95Seconds < 0.5 ? "Passed" : "Failed";
     }
 
-    public static Dictionary<string, string> Queries(string ns, string service, string release, string image, string member) {
+    public static string Selector(string ns, string service, string release, string image, string? member = null) {
         string Q(string value) => JsonSerializer.Serialize(value);
-        var selector = "{" + $"platform_namespace={Q(ns)},platform_service={Q(service)},platform_release={Q(release)},platform_image={Q(image)},member={Q(member)}" + "}";
+        return "{" + $"platform_namespace={Q(ns)},platform_service={Q(service)},platform_release={Q(release)},platform_image={Q(image)}" +
+            (member is null ? "" : $",member={Q(member)}") + "}";
+    }
+
+    public static Dictionary<string, string> Queries(string ns, string service, string release, string image, string member) {
+        var selector = Selector(ns, service, release, image, member);
         var count = $"sum(increase(platform_requests_total{selector}[120s]))";
         return new() {
             ["requests"] = count,
@@ -47,9 +54,9 @@ public static class HealthGate
     }
 
     public static async Task<JsonObject> Observe(string ns, string service, string release, string image,
-        string member, DateTimeOffset started, DateTimeOffset now) {
+        string member, DateTimeOffset started, DateTimeOffset now, int expectedInstances = 2) {
         var queries = Queries(ns, service, release, image, member);
-        var evidence = Resources.Object(new { checkedAt = now, queries });
+        var evidence = Resources.Object(new { checkedAt = now, queries, expectedInstances });
         try {
             var config = KubernetesClientConfiguration.BuildConfigFromConfigFile("/var/run/platform-observers/" + member);
             config.HttpClientTimeout = TimeSpan.FromSeconds(10);
@@ -70,9 +77,9 @@ public static class HealthGate
             var reading = data.Deserialize<HealthReading>(Resources.Json)!;
             evidence["values"] = data;
             evidence["responses"] = raw;
-            evidence["decision"] = Decide(reading, started, now);
+            evidence["decision"] = Decide(reading, started, now, expectedInstances);
             evidence["reason"] = evidence.Text("decision") switch {
-                "Passed" => "Two fresh instances, full bake, sufficient volume, error rate and latency within limits.",
+                "Passed" => $"{expectedInstances} fresh instances, full bake, sufficient volume, error rate and latency within limits.",
                 "Failed" => "Measured HTTP error rate or p95 latency exceeded the gate.",
                 "Baking" => "Waiting for the full 120-second observation window.",
                 _ => "Telemetry is missing, stale, non-finite, or has insufficient samples, instances, or traffic."

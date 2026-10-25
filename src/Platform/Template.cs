@@ -95,6 +95,24 @@ public static class Template
                     namespaceSelector = new { matchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "platform-observers" } },
                     podSelector = new { matchLabels = new { role = "collector" } }
                 } }, ports = new[] { new { protocol = "TCP", port = 4318 } } } } } });
+        if (spec.ScalingProfile == "http-requests") {
+            deployment["spec"]!.AsObject().Remove("replicas");
+            var metric = "platform_requests_total" + HealthGate.Selector(ns, service, release, image);
+            bundle["scaledObject"] = Resources.Object(new {
+                apiVersion = "keda.sh/v1alpha1", kind = "ScaledObject", metadata = Metadata("application"),
+                spec = new {
+                    scaleTargetRef = new { name = "application" }, pollingInterval = 5, minReplicaCount = 2, maxReplicaCount = 6,
+                    advanced = new { horizontalPodAutoscalerConfig = new { behavior = new { scaleDown = new { stabilizationWindowSeconds = 30 } } } },
+                    triggers = new[] { new { type = "prometheus", metadata = new {
+                        serverAddress = "http://prometheus.platform-observers.svc.cluster.local:9090",
+                        query = $"sum(rate({metric}[30s])) and on() (count({metric}) > 0)", threshold = "5", ignoreNullValues = "false"
+                    } } }
+                }
+            });
+            bundle["scaledObject"]!["metadata"]!["labels"]!["platform.example.com/autoscaling"] = "managed";
+            bundle["quota"]!["spec"]!["hard"]!["pods"] = "8";
+            bundle["quota"]!["spec"]!["hard"]!["limits.memory"] = "2Gi";
+        }
         return bundle;
     }
 }
