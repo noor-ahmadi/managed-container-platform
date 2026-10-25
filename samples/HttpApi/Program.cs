@@ -12,8 +12,10 @@ if (args is ["identity-probe", ..]) {
 if (args is ["traffic", var address]) {
     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
     using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(200));
+    var tick = 0;
     while (await timer.WaitForNextTickAsync()) {
         if (File.Exists("/tmp/traffic-paused")) continue;
+        if (File.Exists("/tmp/traffic-slow") && ++tick % 2 == 0) continue;
         using var request = new HttpRequestMessage(HttpMethod.Get, address);
         request.Headers.ConnectionClose = true; // Exercise both replicas instead of one persistent connection.
         try { using var response = await client.SendAsync(request); }

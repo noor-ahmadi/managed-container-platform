@@ -10,6 +10,25 @@ $cli = Join-Path $root 'src/Platform/bin/Debug/net10.0/platform.dll'
 $tenantArgs = @('--kubeconfig', (Join-Path $state 'tenant-kubeconfig'), '--context', 'tenant-demo', '--namespace', 'tenant-demo', '--output', 'json')
 function Invoke-Platform([string[]]$Arguments) { Invoke-Tool dotnet (@($cli) + $Arguments + $tenantArgs) | ConvertFrom-Json -AsHashtable }
 function Get-Release([string]$Name) { Invoke-Kube hub @('get', 'release', $Name, '-n', 'tenant-demo', '-o', 'json') | ConvertFrom-Json -AsHashtable }
+function Get-TrafficPod([hashtable]$Release) {
+    $script:trafficMatch = $null
+    Wait-Until 'current traffic pod is ready' {
+        $current = Get-Release $Release.metadata.name
+        if (-not $current['status'] -or -not $current.status['sourceNamespace']) { return $false }
+        $pods = Invoke-Kube member-a @('get', 'pods', '-n', $current.status.sourceNamespace, '-l', 'role=traffic', '-o', 'json') | ConvertFrom-Json -AsHashtable
+        $ready = @($pods.items | Where-Object {
+            $_.metadata.labels['platform.example.com/release'] -ceq $Release.metadata.name -and
+            $_.spec.containers[0].image -ceq $Release.spec.image -and -not $_.metadata['deletionTimestamp'] -and
+            @($_.status['conditions'] | Where-Object { $_.type -ceq 'Ready' -and $_.status -ceq 'True' }).Count -gt 0
+        })
+        if ($ready.Count -eq 1) {
+            $script:trafficMatch = @{name = $ready[0].metadata.name; namespace = $current.status.sourceNamespace}
+            return $true
+        }
+        return $false
+    } 180
+    $script:trafficMatch
+}
 function Restart-Worker {
     Invoke-Kube hub @('rollout', 'restart', 'deployment/platform-worker', '-n', 'platform-system') | Write-Host
     Invoke-Kube hub @('rollout', 'status', 'deployment/platform-worker', '-n', 'platform-system', '--timeout=90s') | Write-Host
@@ -53,7 +72,6 @@ try {
 } finally { Invoke-Kube hub @('scale', 'deployment/platform-worker', '-n', 'platform-system', '--replicas=1') | Write-Host }
 Invoke-Kube hub @('rollout', 'status', 'deployment/platform-worker', '-n', 'platform-system', '--timeout=90s') | Write-Host
 
-$bad = Invoke-Platform @('release', 'create', $serviceName, '--image', $images['sample-api-error'])
 $first = Get-Content (Join-Path $root 'samples/service.json') -Raw | ConvertFrom-Json
 $first.spec.imageRepository = ($images['sample-api'] -split '@')[0]
 $first.name = 'first-error-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -61,6 +79,30 @@ $firstFile = Join-Path $state 'first-error.json'
 $first | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $firstFile
 Invoke-Platform @('service', 'apply', $firstFile) | Out-Null
 $firstBad = Invoke-Platform @('release', 'create', $first.name, '--image', $images['sample-api-error'])
+$firstTraffic = Get-TrafficPod $firstBad
+Invoke-Kube member-a @('exec', '-n', $firstTraffic.namespace, $firstTraffic.name, '--', 'touch', '/tmp/traffic-slow') | Write-Host
+try {
+    Wait-Until 'insufficient traffic blocks an otherwise fresh completed bake' {
+        $current = Get-Release $firstBad.metadata.name
+        if (-not $current['status'] -or -not $current.status['gates'] -or -not $current.status.gates['member-a']) { return $false }
+        if ($current.status['failure']) { throw $current.status.failure }
+        Assert-NoApproval $current
+        $gate = $current.status.gates.'member-a'
+        $health = $gate['health']
+        $health -and $health.decision -ceq 'Blocked' -and $health['values'] -and $null -ne $health.values.requests -and
+            $health.values.requests -lt 500 -and $health.values.instances -eq 2 -and $health.values.samples -ge 20 -and
+            ([DateTimeOffset]::UtcNow - [DateTimeOffset]$gate.startedAt).TotalSeconds -ge 120 -and
+            $null -ne $health.values.oldestRequestSeconds -and
+            ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000 - $health.values.oldestRequestSeconds) -lt 15
+    } 180
+    $insufficient = Get-Release $firstBad.metadata.name
+} catch {
+    Get-Release $firstBad.metadata.name | ConvertTo-Json -Depth 90 | Set-Content -LiteralPath (Join-Path $state 'fault-failure-evidence.json')
+    throw
+} finally {
+    Invoke-Kube member-a @('exec', '-n', $firstTraffic.namespace, $firstTraffic.name, '--', 'rm', '-f', '/tmp/traffic-slow') | Write-Host
+}
+$bad = Invoke-Platform @('release', 'create', $serviceName, '--image', $images['sample-api-error'])
 $script:baking = $null
 Wait-Until 'ready bad image on A' {
     $current = Get-Release $bad.metadata.name
@@ -74,17 +116,7 @@ if ($badDeployment.status.readyReplicas -ne 2 -or $badDeployment.spec.template.s
 }
 Assert-NoApproval $baking
 # Pause generated traffic while the erroring application remains ready.
-$script:trafficPod = ''
-Wait-Until 'current traffic pod is ready' {
-    $pods = Invoke-Kube member-a @('get', 'pods', '-n', $source, '-l', 'role=traffic', '-o', 'json') | ConvertFrom-Json -AsHashtable
-    $ready = @($pods.items | Where-Object {
-        $_.metadata.labels['platform.example.com/release'] -ceq $bad.metadata.name -and
-        $_.spec.containers[0].image -ceq $images['sample-api-error'] -and -not $_.metadata['deletionTimestamp'] -and
-        @($_.status['conditions'] | Where-Object { $_.type -ceq 'Ready' -and $_.status -ceq 'True' }).Count -gt 0
-    })
-    if ($ready.Count -eq 1) { $script:trafficPod = $ready[0].metadata.name; return $true }
-    return $false
-} 90
+$trafficPod = (Get-TrafficPod $bad).name
 Invoke-Kube member-a @('exec', '-n', $source, $trafficPod, '--', 'touch', '/tmp/traffic-paused') | Write-Host
 try {
     Wait-Until 'stale or absent application telemetry blocks A' {
@@ -120,15 +152,6 @@ try {
         Restart-Worker
     }
 } finally { Invoke-Kube member-a @('exec', '-n', $source, $trafficPod, '--', 'rm', '-f', '/tmp/traffic-paused') | Write-Host }
-Wait-Until 'insufficient traffic blocks an otherwise fresh completed bake' {
-    $current = Get-Release $bad.metadata.name
-    Assert-NoApproval $current
-    $health = $current.status.gates.'member-a'['health']
-    $health -and $health.decision -ceq 'Blocked' -and $health['values'] -and $null -ne $health.values.requests -and
-        $health.values.requests -lt 500 -and $null -ne $health.values.oldestRequestSeconds -and
-        ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000 - $health.values.oldestRequestSeconds) -lt 15
-} 45
-$insufficient = Get-Release $bad.metadata.name
 $script:recovering = $null
 Wait-Until 'compensating recovery with persisted execution identity' {
     $current = Get-Release $bad.metadata.name
