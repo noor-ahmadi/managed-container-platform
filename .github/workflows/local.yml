@@ -30,7 +30,7 @@ jobs:
           ./scripts/test-azure-source.ps1
   lifecycle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -74,6 +74,7 @@ jobs:
             .local/foundation-evidence.json
             .local/deployment-evidence.json
             .local/safe-release-evidence.json
+            .local/autoscaling-evidence.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

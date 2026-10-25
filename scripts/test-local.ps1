@@ -20,7 +20,7 @@ if ((Test-Path -LiteralPath $ownership) -and @(Get-Content $ownership -Raw | Con
 }
 
 New-Item -ItemType Directory -Path $state -Force | Out-Null
-foreach ($receipt in @('foundation-evidence.json', 'deployment-evidence.json', 'safe-release-evidence.json')) {
+foreach ($receipt in @('foundation-evidence.json', 'deployment-evidence.json', 'safe-release-evidence.json', 'autoscaling-evidence.json')) {
     $receiptPath = Join-Path $state $receipt
     if (Test-Path -LiteralPath $receiptPath -PathType Leaf) { Remove-Item -LiteralPath $receiptPath }
 }
@@ -69,6 +69,7 @@ try {
     & (Join-Path $PSScriptRoot 'test-fleet.ps1')
     & (Join-Path $PSScriptRoot 'test-platform.ps1')
     & (Join-Path $PSScriptRoot 'test-safe-releases.ps1')
+    & (Join-Path $PSScriptRoot 'test-autoscaling.ps1')
     & $local down
     & $local down
     if ((Test-Path (Join-Path $state 'registry.json')) -or

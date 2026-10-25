@@ -167,8 +167,9 @@ try {
     & (Join-Path $PSScriptRoot 'test-identity.ps1')
     & (Join-Path $PSScriptRoot 'test-platform.ps1') -Target azure -SkipBootstrap
     & (Join-Path $PSScriptRoot 'test-safe-releases.ps1') -Target azure
+    & (Join-Path $PSScriptRoot 'test-autoscaling.ps1') -Target azure
     @{commit = $session.commit; workingTreeDirty = $false; runId = $runId; completedAt = [DateTime]::UtcNow.ToString('o')
-        infrastructure = $checks; preflight = $plan; azureReleaseSuitePassed = $true; workloadIdentityPassed = $true} |
+        infrastructure = $checks; preflight = $plan; azureReleaseSuitePassed = $true; workloadIdentityPassed = $true; autoscalingPassed = $true} |
         ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $state 'azure-evidence.json')
     Write-Host 'Azure proof passed. Removing the temporary resources now.'
 } catch {
