@@ -77,8 +77,8 @@ try {
             spec = @{replicas = 6; selector = $traffic.spec.selector; template = $traffic.spec.template}}
         $createdLoads += $member
         Invoke-Kube $member @('rollout', 'status', 'deployment/autoscale-load', '-n', 'platform-observers', '--timeout=180s') | Write-Host
-        $load = Invoke-Kube $member @('get', 'deployment/autoscale-load', '-n', 'platform-observers', '-o', 'json') | ConvertFrom-Json -AsHashtable
-        if ($load.spec.template.spec.serviceAccountName -cne 'default' -or $load.spec.template.spec.automountServiceAccountToken -cne $false) { throw 'Load fixture did not use its namespace account without a token mount.' }
+        $load = Invoke-Kube $member @('get', 'pods', '-n', 'platform-observers', '-l', "platform.example.com/service=$serviceName,role=traffic", '-o', 'json') | ConvertFrom-Json -AsHashtable
+        if ($load.items.Count -ne 6 -or @($load.items | Where-Object { $_.spec.serviceAccountName -cne 'default' -or $_.spec.automountServiceAccountToken -cne $false }).Count -ne 0) { throw 'Load pods did not use their namespace account without a token mount.' }
         $account = Invoke-Kube $member @('get', 'deployment/keda-operator', '-n', 'platform-scaling', '-o', 'jsonpath={.spec.template.spec.serviceAccountName}')
         $permission = & kubectl --kubeconfig $kubeconfig --context (Get-Context $member) auth can-i get secrets -n $source "--as=system:serviceaccount:platform-scaling:$account"
         if ($LASTEXITCODE -ne 1 -or $permission -cne 'no') { throw 'Scaling operator can read workload secrets.' }
