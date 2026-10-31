@@ -28,6 +28,11 @@ function Invoke-Kube([string]$Cluster, [string[]]$Arguments) {
         '--request-timeout=30s') + $Arguments)
 }
 
+function Get-DockerContainer([string]$Identity) {
+    $containers = Invoke-Tool docker @('inspect', $Identity) | ConvertFrom-Json -AsHashtable -NoEnumerate
+    $containers[0]
+}
+
 function Get-Context([string]$Cluster) { "$contextPrefix-$Cluster" }
 
 function Get-ClusterConnection([string]$Cluster) {

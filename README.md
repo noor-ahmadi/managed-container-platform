@@ -12,4 +12,6 @@ dotnet run --project src/Platform -- status hello --watch @tenant
 
 Use `samples/autoscaling.json` for the request-rate profile: KEDA and HPA scale each member from two to six replicas, with the same measured release gates and retained-bundle rollback.
 
+For a deployed local service, `pwsh -File scripts/traffic.ps1 up -ServiceName hello` starts a loopback-only HAProxy route with HTTP health checks, member A as primary and member B as backup. Use `pwsh -File scripts/traffic.ps1 down` to remove it. The full suite measures sampled request failures and switching times during application, member, and management outages; these are local fault experiments.
+
 The temporary Azure demo uses three single-node AKS clusters, ACR, and a Workload Identity/Key Vault probe. With Azure CLI and Bicep installed, run `pwsh -File scripts/azure.ps1 plan` to check the trial credit, prices, quotas, and VM availability; `pwsh -File scripts/azure.ps1 run` runs the same release suite and removes its resource groups afterward, including on failure. Cloud credentials and receipts stay in `.local/azure/`. Use `pwsh -File scripts/azure.ps1 down` to resume interrupted cleanup. This dev/test profile makes no high-availability or traffic-failover claims.

@@ -61,6 +61,6 @@ app.Use(async (context, next) => {
     }
 });
 app.MapGet("/healthz", () => Results.Ok(new { ready = true }));
-app.MapGet("/", () => Environment.GetEnvironmentVariable("DEMO_ERRORS") == "true"
+app.MapGet("/", () => Environment.GetEnvironmentVariable("DEMO_ERRORS") == "true" || File.Exists("/tmp/requests-failed")
     ? Results.StatusCode(503) : Results.Ok(new { service, release }));
 await app.RunAsync();

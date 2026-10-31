@@ -53,6 +53,7 @@ try {
     $existing = @(Invoke-Tool kind @('get', 'clusters'))
 
     if ($Action -eq 'down') {
+        & (Join-Path $PSScriptRoot 'traffic.ps1') down
         foreach ($name in @($owned)) {
             Invoke-Tool kind @('delete', 'cluster', '--name', $name, '--kubeconfig', $kubeconfig) | Write-Host
             if ($name -cin @(Invoke-Tool kind @('get', 'clusters'))) {
