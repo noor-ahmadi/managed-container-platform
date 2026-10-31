@@ -16,6 +16,7 @@ $valuesFile = Join-Path $state 'keda-values.json'
         webhooks = @{tag = "$($versions.keda)@$($versions.kedaWebhookImageDigest)"}
     }
     permissions = @{operator = @{restrict = @{secret = $true}}; metricServer = @{restrict = @{secret = $true}}}
+    rbac = @{enabledCustomScaledRefKinds = $false}
     watchLabelSelector = 'platform.example.com/autoscaling=managed'
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $valuesFile
 foreach ($member in @('member-a', 'member-b')) {
