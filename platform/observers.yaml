@@ -43,15 +43,76 @@ data:
           http:
             endpoint: 0.0.0.0:4318
     exporters:
+      otlp_http/jaeger:
+        endpoint: http://jaeger:4318
+        timeout: 2s
+        sending_queue:
+          queue_size: 256
+          num_consumers: 1
+        retry_on_failure:
+          initial_interval: 1s
+          max_interval: 5s
+          max_elapsed_time: 60s
       prometheus:
         endpoint: 0.0.0.0:8889
         metric_expiration: 15s
         translation_strategy: UnderscoreEscapingWithSuffixes
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 128
+        spike_limit_mib: 32
+      resource/member:
+        attributes:
+          - key: platform_member
+            value: __MEMBER__
+            action: upsert
+      batch:
+        timeout: 1s
+        send_batch_size: 128
     service:
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
       pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/member, batch]
+          exporters: [otlp_http/jaeger]
         metrics:
           receivers: [otlp]
           exporters: [prometheus]
+  jaeger.yaml: |
+    extensions:
+      jaeger_storage:
+        backends:
+          demo:
+            memory:
+              max_traces: 5000
+      jaeger_query:
+        storage:
+          traces: demo
+        http:
+          endpoint: 0.0.0.0:16686
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+    exporters:
+      jaeger_storage_exporter:
+        trace_storage: demo
+    service:
+      extensions: [jaeger_storage, jaeger_query]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          exporters: [jaeger_storage_exporter]
   prometheus.yml: |
     global:
       scrape_interval: 5s
@@ -75,6 +136,8 @@ spec:
       role: collector
   template:
     metadata:
+      annotations:
+        platform.example.com/config-sha256: __CONFIG_SHA256__
       labels:
         role: collector
     spec:
@@ -189,3 +252,87 @@ spec:
   ports:
     - name: http
       port: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: platform-observers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: jaeger
+  template:
+    metadata:
+      annotations:
+        platform.example.com/config-sha256: __CONFIG_SHA256__
+      labels:
+        role: jaeger
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: jaeger
+          image: __JAEGER_IMAGE__
+          args: ['--config=/config/jaeger.yaml']
+          ports:
+            - containerPort: 4318
+            - containerPort: 16686
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 16686
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: observer-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: platform-observers
+spec:
+  selector:
+    role: jaeger
+  ports:
+    - name: otlp
+      port: 4318
+    - name: query
+      port: 16686
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jaeger-ingress
+  namespace: platform-observers
+spec:
+  podSelector:
+    matchLabels:
+      role: jaeger
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              role: collector
+      ports:
+        - protocol: TCP
+          port: 4318

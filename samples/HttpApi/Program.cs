@@ -3,6 +3,8 @@ using System.Diagnostics.Metrics;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 if (args is ["identity-probe", ..]) {
     await IdentityProbe.Run(args);
@@ -33,6 +35,10 @@ var tags = new TagList {
     { "platform_pod", Environment.GetEnvironmentVariable("PLATFORM_POD") ?? "local" }
 };
 using var meter = new Meter("ManagedPlatform.Sample");
+using var activities = new ActivitySource("ManagedPlatform.Sample");
+using var tracing = Sdk.CreateTracerProviderBuilder().AddSource(activities.Name)
+    .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(service, serviceVersion: release).AddAttributes(tags))
+    .AddOtlpExporter(options => options.Protocol = OtlpExportProtocol.HttpProtobuf).Build();
 var requests = meter.CreateCounter<long>("platform_requests");
 var errors = meter.CreateCounter<long>("platform_errors");
 var duration = meter.CreateHistogram<double>("platform_request_duration", "s");
@@ -51,9 +57,15 @@ builder.Logging.ClearProviders();
 var app = builder.Build();
 app.Use(async (context, next) => {
     if (context.Request.Path != "/") { await next(context); return; }
+    ActivityContext.TryParse(context.Request.Headers["traceparent"], context.Request.Headers["tracestate"], true, out var parent);
+    using var activity = activities.StartActivity(context.Request.Method + " /", ActivityKind.Server, parent);
+    activity?.SetTag("http.request.method", context.Request.Method).SetTag("http.route", "/");
+    if (activity is not null) context.Response.Headers["X-Platform-Trace"] = activity.TraceId.ToHexString();
     var start = Stopwatch.GetTimestamp();
     try { await next(context); }
     finally {
+        activity?.SetTag("http.response.status_code", context.Response.StatusCode);
+        if (context.Response.StatusCode >= 500) activity?.SetStatus(ActivityStatusCode.Error);
         requests.Add(1, tags);
         errors.Add(context.Response.StatusCode >= 500 ? 1 : 0, tags);
         duration.Record(Stopwatch.GetElapsedTime(start).TotalSeconds, tags);

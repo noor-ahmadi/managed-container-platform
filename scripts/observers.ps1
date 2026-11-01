@@ -4,10 +4,12 @@ param([ValidateSet('local', 'azure')][string]$Target = 'local')
 foreach ($member in @('member-a', 'member-b')) {
     $manifest = (Get-Content (Join-Path $root 'platform/observers.yaml') -Raw).
         Replace('__MEMBER__', $member).Replace('__COLLECTOR_IMAGE__', $versions.collectorImage).
-        Replace('__PROMETHEUS_IMAGE__', $versions.prometheusImage)
+        Replace('__PROMETHEUS_IMAGE__', $versions.prometheusImage).Replace('__JAEGER_IMAGE__', $versions.jaegerImage)
+    $configHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($manifest))).ToLowerInvariant()
+    $manifest = $manifest.Replace('__CONFIG_SHA256__', $configHash)
     $manifest | & kubectl --kubeconfig $kubeconfig --context (Get-Context $member) apply --server-side --field-manager=managed-platform-local -f -
     if ($LASTEXITCODE -ne 0) { throw "Cannot install observers on $member." }
-    foreach ($deployment in @('collector', 'prometheus')) {
+    foreach ($deployment in @('jaeger', 'collector', 'prometheus')) {
         Invoke-Kube $member @('rollout', 'status', "deployment/$deployment", '-n', 'platform-observers', '--timeout=180s') | Write-Host
     }
     $connection = Get-ClusterConnection $member
