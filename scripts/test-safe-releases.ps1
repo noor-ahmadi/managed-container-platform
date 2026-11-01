@@ -241,11 +241,19 @@ Wait-Until 'explicit rollback request verifies the retained bundle' {
 $manualRollback = Get-Release $manual.metadata.name
 if ($manualRollback.status.bundleSha256 -cne $baseline.status.bundleSha256 -or
     $manualRollback.status.releaseName -cne $baseline.status.releaseName) { throw 'Explicit rollback recompiled the retained configuration.' }
+$script:unlockedService = $null
+Wait-Until 'explicit rollback is published and service is unlocked' {
+    $service = Invoke-Kube hub @('get', 'servicedefinition', $serviceName, '-n', 'tenant-demo', '-o', 'json') | ConvertFrom-Json -AsHashtable
+    if ($service.metadata.uid -cne $baseline.spec.serviceUID) { throw 'Service identity changed during rollback.' }
+    if ($service.status['activeRelease'] -cne '' -or $service.status['lastSuccessfulRelease'] -cne $manual.metadata.name) { return $false }
+    $script:unlockedService = $service
+    return $true
+} 30
 @{commit = Invoke-Tool git @('-C', $root, 'rev-parse', 'HEAD')
     workingTreeDirty = @(Invoke-Tool git @('-C', $root, 'status', '--porcelain')).Count -gt 0
     completedAt = [DateTime]::UtcNow.ToString('o'); versions = $versions
     blocked = $blocked; insufficientTraffic = $insufficient; recovered = $recovered; firstFailure = $noBaseline
-    failedRecovery = $failedRecovery; lockedRequest = $lockedRequest; manualRollback = $manualRollback
+    failedRecovery = $failedRecovery; lockedRequest = $lockedRequest; manualRollback = $manualRollback; serviceAfterManualRollback = $unlockedService
     readyErrorDeployment = $badDeployment; memberBBefore = $beforeB; memberBAfter = Get-MemberB
     managementDowntimeTrafficPassed = $true; observerPermissionsDenied = $true
     restartDuringObservation = $true; restartDuringRecovery = $true
