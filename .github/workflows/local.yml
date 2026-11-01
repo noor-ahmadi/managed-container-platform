@@ -76,6 +76,7 @@ jobs:
             .local/safe-release-evidence.json
             .local/autoscaling-evidence.json
             .local/traffic-evidence.json
+            .local/tracing-evidence.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
