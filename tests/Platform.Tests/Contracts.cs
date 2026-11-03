@@ -21,6 +21,7 @@ public sealed class Contracts
         Assert.IsFalse(deployment["spec"]!["template"]!["spec"]!["automountServiceAccountToken"]!.GetValue<bool>());
         Assert.AreNotEqual(Resources.SourceName("tenant-demo", "hello"), Resources.SourceName("other-tenant", "hello"));
         Assert.AreEqual(Resources.Hash(bundle.ToJsonString()), Resources.Hash(Template.Render(Spec, "tenant-demo", "hello", "hello-release", Image).ToJsonString()));
+        Assert.IsFalse(bundle.ToJsonString(Resources.Json).Contains('\r'), "Bundle hashes must use the same JSON bytes on Windows and Linux.");
         Assert.IsTrue(bundle.ContainsKey("quota") && bundle.ContainsKey("deny") && bundle.ContainsKey("dns"));
         Assert.AreEqual("application", bundle["service"].Text("spec", "selector", "role"));
         Assert.AreEqual("traffic", bundle["traffic"].Text("spec", "selector", "matchLabels", "role"));

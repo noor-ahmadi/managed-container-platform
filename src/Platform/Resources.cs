@@ -19,7 +19,7 @@ public static partial class Resources
     public const string FleetVersion = "v1beta1";
     public const string SampleRepository = "localhost:5001/sample-api";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) {
-        WriteIndented = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        WriteIndented = true, NewLine = "\n", UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     [GeneratedRegex("^[a-z][a-z0-9-]{0,38}[a-z0-9]$|^[a-z]$")]
