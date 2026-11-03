@@ -37,50 +37,26 @@ try {
     if (words.Count == 3 && words[0] == "service" && words[1] is "plan" or "apply") {
         var input = JsonSerializer.Deserialize<ServiceFile>(await File.ReadAllTextAsync(words[2], stop.Token), Resources.Json)
             ?? throw new ArgumentException("Service file is empty.");
-        Resources.ValidateName(input.Name);
-        Resources.Validate(input.Spec);
-        var resource = Resources.Resource("ServiceDefinition", input.Name, input.Spec, ns);
+        var resource = TenantClient.Plan(input, ns);
         if (words[1] == "plan") { Console.WriteLine(resource.ToJsonString(Resources.Json)); return 0; }
         using var client = new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(
             options.GetValueOrDefault("kubeconfig"), currentContext: context));
-        var api = new Api(client);
-        var current = await api.Get("servicedefinitions", input.Name, ns);
-        if (current is not null) resource["metadata"]!["resourceVersion"] = current.Text("metadata", "resourceVersion");
-        var applied = current is null ? await api.Create("servicedefinitions", resource, ns) : await api.Replace("servicedefinitions", resource, ns);
+        var applied = await new TenantClient(new Api(client), ns).Apply(input);
         Print(applied, $"Applied {ns}/{input.Name}.");
         return 0;
     }
     using var kube = new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(
         options.GetValueOrDefault("kubeconfig"), currentContext: context));
-    var server = new Api(kube);
+    var server = new TenantClient(new Api(kube), ns);
     var restoring = words.Count == 2 && words[0] == "rollback";
     if ((words.Count == 3 && words[0] == "release" && words[1] == "create") || restoring) {
-        var serviceName = words[^1];
-        var service = await server.Get("servicedefinitions", serviceName, ns) ?? throw new ArgumentException("Service was not found.");
-        var spec = service["spec"]!.Deserialize<ServiceSpec>(Resources.Json)!;
-        var restoreName = "";
-        string image;
-        if (restoring) {
-            if (Required("to") != "last-successful") throw new ArgumentException("Rollback target must be last-successful.");
-            restoreName = service.Text("status", "lastSuccessfulRelease");
-            var baseline = restoreName == "" ? null : await server.Get("releases", restoreName, ns);
-            if (baseline is null || baseline.Text("status", "phase") != "Succeeded" || !HealthGate.IsSupportedPolicy(baseline.Text("status", "gatePolicy")))
-                throw new ArgumentException("No health-verified successful baseline exists.");
-            image = baseline.Text("spec", "image");
-        } else image = Required("image");
-        Resources.ValidateImage(image, spec.ImageRepository);
-        var name = serviceName[..Math.Min(26, serviceName.Length)] + "-" + Guid.NewGuid().ToString("N")[..12];
-        var release = Resources.Resource("Release", name, new {
-            serviceName, serviceUID = service.Text("metadata", "uid"),
-            serviceGeneration = service["metadata"]!["generation"]!.GetValue<long>(), image
-        }, ns);
-        if (restoring) release["spec"]!["restoreRelease"] = restoreName;
-        var created = await server.Create("releases", release, ns);
-        Print(created, $"Created release {name}.");
+        if (restoring && Required("to") != "last-successful") throw new ArgumentException("Rollback target must be last-successful.");
+        var created = await server.CreateRelease(words[^1], restoring ? null : Required("image"), restoring);
+        Print(created, $"Created release {created.Text("metadata", "name")}.");
         return 0;
     }
     if (words.Count == 3 && words[0] == "evidence" && words[1] == "export") {
-        var release = await server.Get("releases", words[2], ns) ?? throw new ArgumentException("Release was not found.");
+        var release = await server.Release(words[2]) ?? throw new ArgumentException("Release was not found.");
         Console.WriteLine(release.ToJsonString(Resources.Json));
         return 0;
     }
@@ -89,10 +65,10 @@ try {
         if (seconds is < 1 or > 1800) throw new ArgumentException("Timeout must be between 1 and 1800 seconds.");
         var deadline = DateTimeOffset.UtcNow.AddSeconds(seconds);
         do {
-            var service = await server.Get("servicedefinitions", words[1], ns) ?? throw new ArgumentException("Service was not found.");
+            var service = await server.Service(words[1]) ?? throw new ArgumentException("Service was not found.");
             var releaseName = service.Text("status", "activeRelease");
             if (releaseName == "") releaseName = service.Text("status", "lastRelease");
-            var release = releaseName == "" ? null : await server.Get("releases", releaseName, ns);
+            var release = releaseName == "" ? null : await server.Release(releaseName);
             var phase = release?.Text("status", "phase") ?? "NoRelease";
             Print(release ?? service, $"{ns}/{words[1]}: {phase} {releaseName}");
             if (!options.ContainsKey("watch") || Resources.Terminal(phase)) return phase is "Failed" or "RolledBack" ? 1 : 0;
