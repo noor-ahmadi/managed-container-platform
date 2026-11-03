@@ -1,0 +1,20 @@
+@inherits LayoutComponentBase
+@inject PortalScope Scope
+
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+        <a class="product" href="/" aria-label="Managed Container Platform">
+            <svg class="mark" viewBox="0 0 28 28" aria-hidden="true"><path d="M14 8v6M7 21v-7h14v7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="1" width="8" height="8" rx="1" fill="currentColor"/><rect x="3" y="20" width="8" height="7" rx="1" fill="currentColor"/><rect x="17" y="20" width="8" height="7" rx="1" fill="currentColor"/></svg>
+            <span>Managed Container<br />Platform</span>
+        </a>
+        <div class="scope-label">Tenant</div>
+        <div class="tenant-name">@Scope.Namespace</div>
+        <nav><NavLink href="/" Match="NavLinkMatch.All">Services</NavLink><NavLink href="/new-service">New service</NavLink></nav>
+        <div class="session-note"><span class="session-dot"></span>Local session<br /><span class="context-name">@Scope.Context</span></div>
+    </aside>
+    <div class="workspace">
+        <header class="topbar"><a href="/" class="mobile-product">Managed Container Platform</a><span>Tenant workspace</span><span class="tenant-name">@Scope.Namespace</span></header>
+        <main id="main" class="sheet">@Body</main>
+    </div>
+</div>

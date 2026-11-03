@@ -1,3 +1,4 @@
 .local/
+.playwright-cli/
 bin/
 obj/

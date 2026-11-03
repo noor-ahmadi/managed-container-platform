@@ -1,0 +1,49 @@
+@page "/"
+@inject TenantClient Client
+<PageTitle>Services | Managed Container Platform</PageTitle>
+<div class="page-heading"><div><h1>Services</h1><p>Release an application across the two workload members.</p></div><a class="button primary" href="/new-service">New service</a></div>
+@if (Error is not null) {
+    <section class="notice" role="alert"><h2>Services could not be loaded</h2><p>@Error</p><a href="/">Retry</a></section>
+} else if (Items.Count == 0) {
+    <section class="empty-state"><h2>Your first service</h2><p>Create a service, then release an immutable image. Both members must pass their application checks before the release succeeds.</p><a class="button" href="/new-service">Create service</a></section>
+} else {
+    <div class="section-heading"><h2>Managed services <span class="count">@Items.Count</span></h2><span class="muted">Fetched @FetchedAt.ToString("HH:mm:ss") UTC · <a href="/">Refresh</a></span></div>
+    <div class="service-list">
+    @foreach (var service in Items) {
+        var name = service.Text("metadata", "name");
+        var release = Latest(service);
+        var phase = release is null ? "No releases" : PortalView.Phase(release);
+        <article class="service-row">
+            <div class="service-identity"><a href="@($"/services/{name}")">@name</a><span class="muted mono">@service.Text("spec", "imageRepository")</span></div>
+            <div><span class="pill @PortalView.Tone(phase)">@phase</span><span class="subline">@(service.Text("status", "activeRelease") != "" ? "Release in progress" : "Ready for a release")</span></div>
+            <div class="member-summary">@MemberSummary(release)</div>
+            <a class="row-action" href="@($"/services/{name}")">Open service <span aria-hidden="true">→</span></a>
+        </article>
+    }
+    </div>
+}
+<section class="release-method"><h2>One release, two measured gates</h2><div class="member-flow"><span>member-a</span><span aria-hidden="true">→</span><span>member-b</span></div><p>Each member needs a full @HealthGate.BakeSeconds-second observation window. Failed releases retain their evidence and restore the last healthy bundle.</p></section>
+@code {
+    private List<JsonNode> Items = [];
+    private JsonArray Releases = [];
+    private string? Error;
+    private DateTime FetchedAt;
+    protected override async Task OnInitializedAsync() {
+        try {
+            Items = (await Client.Services()).OfType<JsonNode>().OrderBy(s => s.Text("metadata", "name")).ToList();
+            Releases = await Client.Releases();
+            FetchedAt = DateTime.UtcNow;
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); }
+    }
+    private JsonNode? Latest(JsonNode service) {
+        var name = service.Text("status", "activeRelease");
+        if (name == "") name = service.Text("status", "lastRelease");
+        return Releases.FirstOrDefault(r => r.Text("metadata", "name") == name && r.Text("spec", "serviceUID") == service.Text("metadata", "uid"));
+    }
+    private static string MemberSummary(JsonNode? release) {
+        if (release is null) return "Awaiting first release";
+        var execution = release?["status"]?["recovery"] ?? release?["status"];
+        return string.Join(" · ", new[] { "member-a", "member-b" }.Select(member => member + ": " +
+            (execution?["gates"]?[member].Text("approvedAt") is { Length: > 0 } ? "Passed" : execution?["gates"]?[member].Text("health", "decision") is { Length: > 0 } decision ? decision : "Waiting")));
+    }
+}

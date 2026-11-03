@@ -1,0 +1,4 @@
+IBM Plex Sans (400, 500, 600) and IBM Plex Mono (400).
+Source: https://fonts.google.com/specimen/IBM+Plex+Sans
+Source: https://fonts.google.com/specimen/IBM+Plex+Mono
+Licensed under the SIL Open Font License in OFL.txt. Served locally.

@@ -1,0 +1,75 @@
+@page "/services/{Name}"
+@inject TenantClient Client
+@inject NavigationManager Navigation
+<PageTitle>@Name | Managed Container Platform</PageTitle>
+<a class="breadcrumb" href="/">← Services</a>
+<div class="page-heading"><div><h1>@Name</h1><p>Release history and the next deployment.</p></div><a class="button" href="@($"/services/{Name}/edit")">Service settings</a></div>
+@if (Error is not null) { <div class="notice" role="alert">@Error <a href="@($"/services/{Name}")">Refresh</a></div> }
+@if (Service is not null) {
+    <div class="service-details"><span class="mono">@Service.Text("spec", "imageRepository")</span><span>@(Service.Text("spec", "scalingProfile") == "http-requests" ? "2 to 6 replicas per member" : "2 replicas per member")</span><span>Port @Service.Text("spec", "port") · @Service.Text("spec", "readinessPath")</span></div>
+    @if (Service.Text("status", "activeRelease") is { Length: > 0 } active) {
+        <div class="running-notice"><span class="status-dot"></span><span>A release is active. <a href="@($"/releases/{active}")">Open release status</a></span></div>
+    }
+    <div class="detail-layout">
+        <section><div class="section-heading"><h2>Releases <span class="count">@History.Count</span></h2><a href="@($"/services/{Name}")">Refresh</a></div>
+        @if (History.Count == 0) { <div class="empty-row">No releases yet. Supply an immutable image to start the first deployment.</div> }
+        else {
+            <div class="release-list">
+            @foreach (var release in History) {
+                var phase = PortalView.Phase(release);
+                <article class="release-row"><div><a class="mono" href="@($"/releases/{release.Text("metadata", "name")}")">@release.Text("metadata", "name")</a><span class="subline">@PortalView.Time(release.Text("metadata", "creationTimestamp"))</span><span class="subline mono image-digest">@release.Text("spec", "image")</span></div><span class="pill @PortalView.Tone(phase)">@phase</span></article>
+            }
+            </div>
+        }
+        </section>
+        <div class="action-column">
+            <section class="action-panel"><h2>New release</h2><p>The worker checks member-a before it promotes the image to member-b.</p>
+                <EditForm Model="Input" OnValidSubmit="Deploy" FormName="release"><DataAnnotationsValidator />
+                    <div class="field"><label for="image">Immutable image</label><InputText id="image" @bind-Value="Input!.Image" autocomplete="off" placeholder="@("repository@sha256:digest")" /><ValidationMessage For="() => Input!.Image" /><span class="hint">@Service.Text("spec", "imageRepository")@@sha256: followed by 64 lowercase hex characters.</span></div>
+                    <button type="submit" class="primary" disabled="@Locked">Create release</button>
+                </EditForm>
+                @if (Locked) { <p class="hint">This service is locked by its active release.</p> }
+            </section>
+            <section class="rollback-panel"><h2>Restore last successful</h2><p>Creates a new release from the retained healthy bundle, with the same member health checks.</p>
+                @if (!HasBaseline) { <p class="hint">A health-verified successful release is required.</p> }
+                else {
+                    <EditForm Model="RollbackInput" OnValidSubmit="Rollback" FormName="rollback"><DataAnnotationsValidator />
+                        <label class="check-label"><InputCheckbox @bind-Value="RollbackInput!.Confirm" />Restore the last successful bundle</label>
+                        <button type="submit" disabled="@Locked">Request rollback</button>
+                    </EditForm>
+                }
+            </section>
+        </div>
+    </div>
+}
+@code {
+    [Parameter] public string Name { get; set; } = "";
+    [SupplyParameterFromForm(FormName = "release")] private ReleaseInput? Input { get; set; }
+    [SupplyParameterFromForm(FormName = "rollback")] private RollbackForm? RollbackInput { get; set; }
+    private JsonObject? Service;
+    private List<JsonNode> History = [];
+    private string? Error;
+    private bool Locked => Service.Text("status", "activeRelease") != "";
+    private bool HasBaseline => Service.Text("status", "lastSuccessfulRelease") != "";
+    protected override async Task OnInitializedAsync() {
+        Input ??= new(); RollbackInput ??= new();
+        try {
+            Service = await Client.Service(Name) ?? throw new ArgumentException("Service was not found.");
+            History = (await Client.Releases()).OfType<JsonNode>().Where(r => r.Text("spec", "serviceUID") == Service.Text("metadata", "uid"))
+                .OrderByDescending(r => r.Text("metadata", "creationTimestamp")).ToList();
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); }
+    }
+    private async Task Request(bool rollback) {
+        try {
+            var current = await Client.Service(Name) ?? throw new ArgumentException("Service was not found.");
+            if (current.Text("status", "activeRelease") != "") throw new ArgumentException("A release is active. Wait for its service lock to clear.");
+            if (rollback && RollbackInput?.Confirm != true) throw new ArgumentException("Confirm that you want to restore the last successful bundle.");
+            var release = await Client.CreateRelease(Name, rollback ? null : Input!.Image, rollback);
+            Navigation.NavigateTo("/releases/" + release.Text("metadata", "name"));
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); }
+    }
+    private Task Deploy() => Request(false);
+    private Task Rollback() => Request(true);
+    public sealed class ReleaseInput { [Required, StringLength(512)] public string Image { get; set; } = ""; }
+    public sealed class RollbackForm { public bool Confirm { get; set; } }
+}

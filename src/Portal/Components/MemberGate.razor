@@ -1,0 +1,21 @@
+@{ var decision = Gate.Text("approvedAt") != "" ? "Passed" : Gate.Text("health", "decision") is { Length: > 0 } state ? state : "Waiting";
+   var values = Gate?["health"]?["values"];
+   var elapsed = Elapsed(); }
+<section class="member-gate">
+    <div class="section-heading"><h2>@Member</h2><span class="pill @PortalView.Tone(decision)">@decision</span></div>
+    <p class="gate-reason">@(Gate.Text("health", "reason") is { Length: > 0 } reason ? reason : "Waiting for this member's deployment and application observations.")</p>
+    <div class="observation-label"><span>Observation window</span><span class="num">@PortalView.Figure(elapsed, "N0", " s") / @HealthGate.BakeSeconds s minimum</span></div>
+    <progress max="@HealthGate.BakeSeconds" value="@(elapsed ?? 0)" aria-label="@($"{Member} observation seconds")"></progress>
+    <dl class="gate-values"><dt>Requests</dt><dd>@PortalView.Figure(PortalView.Number(values, "requests"))</dd><dt>HTTP error rate</dt><dd>@PortalView.Figure(PortalView.Number(values, "errorRate") * 100, "N2", "%")</dd><dt>p95 latency</dt><dd>@PortalView.Figure(PortalView.Number(values, "p95Seconds") * 1000, "N1", " ms")</dd><dt>Observed replicas</dt><dd>@PortalView.Figure(PortalView.Number(values, "instances"))</dd><dt>Metric age at check</dt><dd>@PortalView.Figure(MetricAge(), "N1", " s")</dd></dl>
+    <p class="gate-time">@(Gate.Text("health", "checkedAt") is { Length: > 0 } recorded ? "Recorded " + PortalView.Time(recorded) : "No metric check recorded yet")</p>
+</section>
+@code {
+    [Parameter] public string Member { get; set; } = "";
+    [Parameter] public JsonNode? Gate { get; set; }
+    private double? Elapsed() => DateTimeOffset.TryParse(Gate.Text("startedAt"), out var start) &&
+        DateTimeOffset.TryParse(Gate.Text("approvedAt") is { Length: > 0 } approved ? approved : Gate.Text("health", "checkedAt"), out var end)
+        ? Math.Max(0, (end - start).TotalSeconds) : null;
+    private double? MetricAge() => DateTimeOffset.TryParse(Gate.Text("health", "checkedAt"), out var checkedAt) &&
+        PortalView.Number(Gate?["health"]?["values"], "oldestRequestSeconds") is { } seconds
+        ? checkedAt.ToUnixTimeMilliseconds() / 1000d - seconds : null;
+}

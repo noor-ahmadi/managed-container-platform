@@ -1,0 +1,55 @@
+@page "/new-service"
+@page "/services/{Name}/edit"
+@inject TenantClient Client
+@inject NavigationManager Navigation
+<PageTitle>@(Name is null ? "New service" : "Service settings") | Managed Container Platform</PageTitle>
+<a class="breadcrumb" href="@(Name is null ? "/" : $"/services/{Name}")">← @(Name is null ? "Services" : Name)</a>
+<div class="page-heading"><div><h1>@(Name is null ? "New service" : "Service settings")</h1><p>Define the application once. Create a release when you are ready to deploy.</p></div></div>
+@if (Error is not null) { <div class="notice" role="alert">@Error</div> }
+<div class="editor-layout">
+    <section class="section-intro"><h2>Application</h2><p>The HTTP API template runs a restricted workload across member-a and member-b.</p><dl class="facts"><dt>Placement</dt><dd>Two members, sequential release</dd><dt>Sizing</dt><dd>Small</dd><dt>Promotion</dt><dd>Measured HTTP health</dd></dl></section>
+    @if (Input is not null) {
+    <EditForm Model="Input" OnValidSubmit="Save" FormName="service" class="form-panel">
+        <DataAnnotationsValidator /><ValidationSummary />
+        <div class="field"><label for="service-name">Service name</label><InputText id="service-name" @bind-Value="Input!.Name" readonly="@(Name is not null)" autocomplete="off" /><ValidationMessage For="() => Input!.Name" /><span class="hint">Lowercase letters, numbers and hyphens. Up to 40 characters.</span></div>
+        <div class="field"><label for="repository">Image repository</label><InputText id="repository" @bind-Value="Input!.Repository" autocomplete="off" placeholder="localhost:5001/sample-api" /><ValidationMessage For="() => Input!.Repository" /><span class="hint">Use the repository approved by your platform operator. The release supplies the digest.</span></div>
+        <div class="field-pair"><div class="field"><label for="port">Container port</label><InputNumber id="port" @bind-Value="Input!.Port" /><ValidationMessage For="() => Input!.Port" /></div><div class="field"><label for="readiness">Readiness path</label><InputText id="readiness" @bind-Value="Input!.ReadinessPath" /><ValidationMessage For="() => Input!.ReadinessPath" /></div></div>
+        <div class="field"><label for="scaling">Replicas</label><InputSelect id="scaling" @bind-Value="Input!.ScalingProfile"><option value="fixed">Fixed: 2 per member</option><option value="http-requests">Request rate: 2 to 6 per member</option></InputSelect></div>
+        <div class="form-footer"><button type="submit" class="primary" disabled="@Locked">@(Name is null ? "Create service" : "Save service")</button><a href="@(Name is null ? "/" : $"/services/{Name}")">Cancel</a></div>
+        @if (Locked) { <p class="hint">A release is active. Wait for its service lock to clear before changing settings.</p> }
+    </EditForm>
+    }
+</div>
+@code {
+    [Parameter] public string? Name { get; set; }
+    [SupplyParameterFromForm] private ServiceInput? Input { get; set; }
+    private string? Error;
+    private bool Locked;
+    protected override async Task OnInitializedAsync() {
+        try {
+            if (Name is null) { Input ??= new(); return; }
+            var service = await Client.Service(Name) ?? throw new ArgumentException("Service was not found.");
+            Locked = service.Text("status", "activeRelease") != "";
+            Input ??= new ServiceInput { Name = Name, Repository = service.Text("spec", "imageRepository"), Port = service["spec"]!["port"]!.GetValue<int>(),
+                ReadinessPath = service.Text("spec", "readinessPath"), ScalingProfile = service.Text("spec", "scalingProfile") is { Length: > 0 } profile ? profile : "fixed" };
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); Input ??= new(); Locked = true; }
+    }
+    private async Task Save() {
+        try {
+            if (Name is not null) Input!.Name = Name;
+            var existing = await Client.Service(Input!.Name);
+            if (Name is null && existing is not null) throw new ArgumentException("This service already exists. Open its settings to review changes.");
+            if (existing.Text("status", "activeRelease") != "") throw new ArgumentException("A release is active. Refresh when it finishes.");
+            var spec = new ServiceSpec("http-api", Input.Repository, Input.Port, Input.ReadinessPath, "small", "two-region", Input.ScalingProfile);
+            await Client.Apply(new ServiceFile(Input.Name, spec));
+            Navigation.NavigateTo("/services/" + Input.Name);
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); }
+    }
+    public sealed class ServiceInput {
+        [Required, StringLength(40)] public string Name { get; set; } = "";
+        [Required, StringLength(256)] public string Repository { get; set; } = Resources.SampleRepository;
+        [Range(1024, 65535)] public int Port { get; set; } = 8080;
+        [Required, StringLength(128)] public string ReadinessPath { get; set; } = "/healthz";
+        public string ScalingProfile { get; set; } = "fixed";
+    }
+}

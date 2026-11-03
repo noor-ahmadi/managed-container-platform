@@ -1,0 +1,44 @@
+@page "/releases/{Name}"
+@inject TenantClient Client
+<PageTitle>@Name | Managed Container Platform</PageTitle>
+@if (RefreshAutomatically) { <HeadContent><meta http-equiv="refresh" content="5" /></HeadContent> }
+<a class="breadcrumb" href="@(Release is null ? "/" : $"/services/{Release.Text("spec", "serviceName")}")">← @(Release is null ? "Services" : Release.Text("spec", "serviceName"))</a>
+<div class="page-heading"><div><h1>Release</h1><p class="mono release-name">@Name</p></div><div class="heading-actions"><a class="button" href="@($"/releases/{Name}")">Refresh</a><a class="button" href="@($"/api/releases/{Name}/evidence")">Export evidence</a></div></div>
+@if (Error is not null) { <div class="notice" role="alert">@Error</div> }
+@if (Release is not null) {
+    var phase = PortalView.Phase(Release);
+    <section class="release-status"><div><span class="pill @PortalView.Tone(phase)">@phase</span><h2>@Headline(phase)</h2><p>@Description(phase)</p></div><span class="muted">Fetched @FetchedAt.ToString("HH:mm:ss") UTC<br />@(RefreshAutomatically ? "Refreshing every 5 seconds" : "Recorded release evidence")</span></section>
+    @if (Release.Text("status", "failure") is { Length: > 0 } failure) { <div class="notice failure"><h2>Original release failure</h2><p>@failure</p></div> }
+    @if (Release.Text("status", "recoveryFailure") is { Length: > 0 } recoveryFailure) { <div class="notice failure"><h2>Recovery needs operator attention</h2><p>@recoveryFailure</p></div> }
+    <div class="section-heading"><h2>@(Release?["status"]?["recovery"] is null ? "Member gates" : "Recovery member gates")</h2><span class="muted">member-a, then member-b</span></div>
+    <div class="member-gates"><MemberGate Member="member-a" Gate="@(Execution?["gates"]?["member-a"])" /><MemberGate Member="member-b" Gate="@(Execution?["gates"]?["member-b"])" /></div>
+    <section class="release-record"><h2>Release record</h2><dl class="record-values"><dt>Requested image</dt><dd class="mono">@Release.Text("spec", "image")</dd><dt>Rendered bundle</dt><dd class="mono">@(Release.Text("status", "bundleSha256") is { Length: > 0 } hash ? hash : "Not recorded")</dd><dt>Started</dt><dd>@PortalView.Time(Release.Text("status", "startedAt"))</dd><dt>Completed</dt><dd>@PortalView.Time(Release.Text("status", "completedAt"))</dd><dt>Gate policy</dt><dd>@(Release.Text("status", "gatePolicy") is { Length: > 0 } policy ? policy : "Not recorded")</dd><dt>Worker source</dt><dd class="mono">@(Release.Text("status", "provenance", "commit") is { Length: > 0 } commit ? commit : "Not recorded")</dd></dl></section>
+    @if (Service is not null && Service.Text("metadata", "uid") == Release.Text("spec", "serviceUID")) {
+        <div class="next-action">@if (Service.Text("status", "activeRelease") != "") { <p>The service is locked while the worker completes this operation.</p> }<a href="@($"/services/{Release.Text("spec", "serviceName")}")">Open service and release controls →</a></div>
+    }
+}
+@code {
+    [Parameter] public string Name { get; set; } = "";
+    private JsonObject? Release;
+    private JsonObject? Service;
+    private string? Error;
+    private DateTime FetchedAt;
+    private JsonNode? Execution => Release?["status"]?["recovery"] ?? Release?["status"];
+    private bool RefreshAutomatically => Release is not null && (!Resources.Terminal(PortalView.Phase(Release)) || Service.Text("status", "activeRelease") == Name);
+    protected override async Task OnInitializedAsync() {
+        try {
+            Release = await Client.Release(Name) ?? throw new ArgumentException("Release was not found.");
+            Service = await Client.Service(Release.Text("spec", "serviceName"));
+            FetchedAt = DateTime.UtcNow;
+        } catch (Exception error) when (PortalErrors.Expected(error)) { Error = PortalErrors.Message(error); }
+    }
+    private static string Headline(string phase) => phase switch { "Succeeded" => "Both members passed", "RolledBack" => "Failed release recovered", "Failed" => "Release failed", "Blocked" => "Release blocked", "Baking" => "Observing application health", "RollingBack" => "Restoring the healthy bundle", _ => "Release in progress" };
+    private string Description(string phase) => phase switch {
+        "Succeeded" => "The release passed its recorded application health gates.",
+        "RolledBack" => "The original failure is retained. Recovery is recorded separately below.",
+        "Failed" when Release.Text("status", "recoveryOutcome") == "NoSuccessfulBaseline" => "No successful baseline was available for recovery.",
+        "Blocked" => "Promotion is paused. Review the recorded reason and member observations.",
+        "Baking" => "Promotion requires fresh metrics, enough traffic and a full observation window.",
+        _ => "Member observations and decisions appear as the worker records them."
+    };
+}
