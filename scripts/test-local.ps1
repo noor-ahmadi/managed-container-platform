@@ -20,7 +20,7 @@ if ((Test-Path -LiteralPath $ownership) -and @(Get-Content $ownership -Raw | Con
 }
 
 New-Item -ItemType Directory -Path $state -Force | Out-Null
-foreach ($receipt in @('foundation-evidence.json', 'deployment-evidence.json', 'safe-release-evidence.json', 'autoscaling-evidence.json', 'traffic-evidence.json', 'tracing-evidence.json', 'portal-evidence.json')) {
+foreach ($receipt in @('foundation-evidence.json', 'deployment-evidence.json', 'safe-release-evidence.json', 'autoscaling-evidence.json', 'traffic-evidence.json', 'tracing-evidence.json', 'portal-evidence.json', 'evidence-verification.json')) {
     $receiptPath = Join-Path $state $receipt
     if (Test-Path -LiteralPath $receiptPath -PathType Leaf) { Remove-Item -LiteralPath $receiptPath }
 }
@@ -87,6 +87,7 @@ try {
     if ((Get-FileHash -LiteralPath $sentinel).Hash -cne $sentinelHash) {
         throw 'The default kubeconfig changed.'
     }
+    & (Join-Path $PSScriptRoot 'test-evidence.ps1')
     Write-Host 'Lifecycle check passed: pinned nodes, ownership checks, repeated startup and teardown, isolated kubeconfig.'
 } finally {
     try { & $local down } finally { $env:KUBECONFIG = $originalConfig }

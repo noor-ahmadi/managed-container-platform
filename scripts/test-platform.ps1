@@ -142,11 +142,17 @@ foreach ($member in @('member-a', 'member-b')) {
 $releasePatch = @{ spec = @{ image = $repository + '@sha256:' + ('a' * 64) } } | ConvertTo-Json -Compress
 Assert-Denied hub @('patch', 'release', $releaseName, '-n', 'tenant-demo', '--type=merge', '-p', $releasePatch, '--dry-run=server') 'immutable'
 $export = Invoke-Platform @('evidence', 'export', $releaseName)
+$watchError = Join-Path $state 'status-watch-error.txt'
+$watchArguments = @($cli,'status',$service.name,'--watch','--timeout','30') + $tenantArgs
+$watchOutput = & dotnet @watchArguments 2> $watchError | Out-String
+if ($LASTEXITCODE -notin @(0,1) -or (Get-Item $watchError).Length -gt 0 -or $watchOutput -notmatch '"phase":\s*"(Succeeded|Failed)"') { throw 'Status watch did not return a terminal release.' }
+$published = Invoke-Kube hub @('get','servicedefinition',$service.name,'-n','tenant-demo','-o','json') | ConvertFrom-Json -AsHashtable
+if ($published.status['activeRelease'] -cne '' -or $published.status['lastSuccessfulRelease'] -cne $releaseName) { throw 'Status watch returned before service publication.' }
 @{ commit = Invoke-Tool git @('-C', $root, 'rev-parse', 'HEAD')
     workingTreeDirty = @(Invoke-Tool git @('-C', $root, 'status', '--porcelain')).Count -gt 0
     completedAt = [DateTime]::UtcNow.ToString('o'); release = $export; members = $members
     duplicateRelease = Get-Release $duplicate.metadata.name; workerRestartPreservedRun = $true
     tenantOperatorPermissionsDenied = $true; mutableImageDenied = $true; privilegedPodDenied = $true; immutableReleaseSpec = $true
-    quotaExceededDenied = $true; crossTenantTrafficDenied = $true
+    quotaExceededDenied = $true; crossTenantTrafficDenied = $true; statusWatchWaitedForPublication = $true
 } | ConvertTo-Json -Depth 70 | Set-Content -LiteralPath (Join-Path $state 'deployment-evidence.json')
 Write-Host 'Self-service passed: tenant CLI, two members, application responses, restart, duplicate rejection, and admission checks.'

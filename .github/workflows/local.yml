@@ -78,6 +78,7 @@ jobs:
             .local/traffic-evidence.json
             .local/tracing-evidence.json
             .local/portal-evidence.json
+            .local/evidence-verification.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
