@@ -366,14 +366,14 @@ public sealed class ReleaseWorker(Api api)
     }
 
     private static void ValidateTargets(JsonObject run) {
-        var targets = run["status"]!["stagesStatus"]!.AsArray().SelectMany(s =>
-            s!["clusters"]!.AsArray().Select(c => c.Text("clusterName")));
-        if (!targets.SequenceEqual(Members)) throw new InvalidOperationException("Run did not resolve the expected ordered members.");
-        var stages = run["status"]!["stagedUpdateStrategySnapshot"]!["stages"]!.AsArray();
-        if (stages.Count != 2 || stages.Any(s => s?["afterStageTasks"]?.AsArray().Count != 1 ||
-            s["afterStageTasks"]![0].Text("type") != "Approval"))
-            throw new InvalidOperationException("Each stage must have exactly one after-stage approval.");
+        if (!TargetsMatch(run)) throw new InvalidOperationException("Run did not resolve the two ordered members and their approval stages.");
     }
+
+    public static bool TargetsMatch(JsonNode? run) =>
+        run?["status"]?["stagesStatus"] is JsonArray { Count: 2 } targets && targets.Select((stage, index) =>
+            stage?["clusters"] is JsonArray { Count: 1 } clusters && clusters[0].Text("clusterName") == Members[index]).All(match => match) &&
+        run["status"]?["stagedUpdateStrategySnapshot"]?["stages"] is JsonArray { Count: 2 } stages && stages.All(stage =>
+            stage?["afterStageTasks"] is JsonArray { Count: 1 } tasks && tasks[0].Text("type") == "Approval");
 
     private static void CheckInitialization(JsonObject run) {
         if (Resources.Condition(run, "Initialized", "False")) {
